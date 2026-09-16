@@ -1,0 +1,329 @@
+<!doctype html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8">
+
+<title>WebKit 605 PoC Harness</title>
+
+<style>
+
+body {
+
+    background:#111;
+
+    color:#eee;
+
+    font-family:monospace;
+
+    padding:20px;
+
+}
+
+.ok { color:#5f5; }
+
+.fail { color:#f66; }
+
+.info { color:#6cf; }
+
+pre {
+
+    background:#1b1b1b;
+
+    padding:15px;
+
+    white-space:pre-wrap;
+
+}
+
+button {
+
+    padding:12px 20px;
+
+    margin-right:10px;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<h2>WebKit 605 / PS5 13.60 PoC</h2>
+
+<button onclick="run()">Run PoC</button>
+
+<button onclick="stress()">Memory Stress</button>
+
+<pre id="log"></pre>
+
+<script>
+
+const out = document.querySelector("#log");
+
+function log(s, cls="") {
+
+    const e = document.createElement("div");
+
+    e.textContent = s;
+
+    e.className = cls;
+
+    out.appendChild(e);
+
+}
+
+function test(name, fn) {
+
+    try {
+
+        const result = fn();
+
+        if (result === false)
+
+            throw new Error("unexpected result");
+
+        log("[PASS] " + name, "ok");
+
+        return true;
+
+    } catch (e) {
+
+        log("[FAIL] " + name + ": " + e, "fail");
+
+        return false;
+
+    }
+
+}
+
+async function run() {
+
+    out.textContent = "";
+
+    log("WebKit PoC starting...", "info");
+
+    log("UA: " + navigator.userAgent);
+
+    log("");
+
+    test("ArrayBuffer", () => {
+
+        const b = new ArrayBuffer(0x1000);
+
+        return b.byteLength === 0x1000;
+
+    });
+
+    test("Uint8Array", () => {
+
+        const a = new Uint8Array(256);
+
+        for (let i=0;i<a.length;i++)
+
+            a[i] = i;
+
+        return a[255] === 255;
+
+    });
+
+    test("Uint32Array", () => {
+
+        const a = new Uint32Array(16);
+
+        a[0] = 0x41414141;
+
+        a[1] = 0x42424242;
+
+        return (
+
+            a[0] === 0x41414141 &&
+
+            a[1] === 0x42424242
+
+        );
+
+    });
+
+    test("DataView bounds", () => {
+
+        const b = new ArrayBuffer(16);
+
+        const d = new DataView(b);
+
+        let trapped = false;
+
+        try {
+
+            d.getUint32(20);
+
+        } catch(e) {
+
+            trapped = true;
+
+        }
+
+        return trapped;
+
+    });
+
+    test("TypedArray bounds", () => {
+
+        const a = new Uint8Array(16);
+
+        a[100] = 0x41;
+
+        return a.length === 16;
+
+    });
+
+    test("BigInt", () =>
+
+        typeof BigInt !== "undefined"
+
+    );
+
+    test("Promise", () =>
+
+        typeof Promise !== "undefined"
+
+    );
+
+    test("fetch", () =>
+
+        typeof fetch !== "undefined"
+
+    );
+
+    test("WebCrypto", () =>
+
+        typeof crypto !== "undefined"
+
+    );
+
+    test("Worker", () =>
+
+        typeof Worker !== "undefined"
+
+    );
+
+    log("");
+
+    log("Feature report:", "info");
+
+    [
+
+        "WebAssembly",
+
+        "indexedDB",
+
+        "SharedArrayBuffer"
+
+    ].forEach(name => {
+
+        const available =
+
+            typeof window[name] !== "undefined";
+
+        log(
+
+            name + ": " +
+
+            (available ? "available" : "unavailable"),
+
+            available ? "ok" : "fail"
+
+        );
+
+    });
+
+    log("");
+
+    log("PoC completed.", "info");
+
+}
+
+/*
+
+ * Controlled allocator stress test.
+
+ *
+
+ * This intentionally stays inside normal JS memory
+
+ * semantics. It does not corrupt memory.
+
+ */
+
+function stress() {
+
+    log("");
+
+    log("Starting allocation stress...", "info");
+
+    const allocations = [];
+
+    try {
+
+        for (let i=0; i<256; i++) {
+
+            const buffer =
+
+                new ArrayBuffer(1024 * 1024);
+
+            const view =
+
+                new Uint8Array(buffer);
+
+            view[0] = i & 0xff;
+
+            view[view.length-1] =
+
+                (i ^ 0xff) & 0xff;
+
+            allocations.push(buffer);
+
+            if ((i % 16) === 0)
+
+                log(
+
+                    "Allocated " +
+
+                    (i + 1) +
+
+                    " MB"
+
+                );
+
+        }
+
+        log(
+
+            "[PASS] allocation test completed",
+
+            "ok"
+
+        );
+
+    } catch(e) {
+
+        log(
+
+            "[INFO] allocation stopped: " + e,
+
+            "info"
+
+        );
+
+    }
+
+}
+
+</script>
+
+</body>
+
+</html>
