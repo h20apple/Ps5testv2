@@ -1,947 +1,622 @@
 <!doctype html>
-<html>
-<head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V25 Shadow/Observer Lifetime Probe</title>
+<title>PS5 13.60 - V26 SVG/SMIL Lifecycle Probe</title>
 
 <style>
 body {
-    background:#101827;
+    background:#111;
     color:#eee;
     font:16px monospace;
     padding:18px;
 }
 button {
-    font:16px monospace;
-    padding:10px;
+    font:18px monospace;
+    padding:10px 18px;
 }
-#log {
-    background:#17233a;
-    padding:14px;
-    margin-top:12px;
+#status {
+    margin:16px 0;
+    padding:12px;
+    border:1px solid #555;
+}
+pre {
     white-space:pre-wrap;
+    word-break:break-word;
 }
-.ok   { color:#59ff7a; }
-.bad  { color:#ff6868; }
-.info { color:#63caff; }
-.warn { color:#ffd166; }
+svg {
+    position:absolute;
+    left:-10000px;
+    top:-10000px;
+}
 </style>
-</head>
 
-<body>
+<h2>PS5 WebKit V26</h2>
+<div>SVG / SMIL lifecycle & re-entrancy probe</div>
 
-<h2>PS5 13.60 — V25 Shadow/Observer Lifetime Probe</h2>
+<p>
+<button id="run">RUN V26</button>
+</p>
 
-<button onclick="runV25()">RUN V25</button>
-
-<div id="log"></div>
-<div id="sandbox"></div>
+<div id="status">READY</div>
+<pre id="log"></pre>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V25_CP";
+const logBox = document.querySelector("#log");
+const statusBox = document.querySelector("#status");
+const NS = "http://www.w3.org/2000/svg";
 
-const out =
-    document.getElementById("log");
-
-const sandbox =
-    document.getElementById("sandbox");
-
-let seq = 0;
 let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
+let current = "NONE";
 
-function log(text, cls="") {
-
-    const d =
-        document.createElement("div");
-
-    d.textContent = text;
-    d.className = cls;
-
-    out.appendChild(d);
+function log(s) {
+    logBox.textContent += s + "\n";
+    console.log(s);
 }
 
-function cp(test, phase, detail="") {
-
-    seq++;
+function checkpoint(name, stage) {
+    current = name + ":" + stage;
 
     try {
+        localStorage.setItem("PS5_V26_CHECKPOINT", current);
+    } catch (_) {}
 
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"RUNNING",
-                test:test,
-                phase:phase,
-                detail:detail,
-                sequence:seq,
-                time:Date.now()
-            })
-        );
-
-    } catch(e) {}
-
-    log(
-        seq + ": [" +
-        test + "] " +
-        phase +
-        (detail ? " — " + detail : ""),
-        "info"
-    );
+    log("[CP] " + current);
 }
 
-function previous() {
+function ok(name) {
+    pass++;
+    log("[PASS] " + name);
+}
 
+function anomaly(name, text) {
+    anomalies++;
+    log("[ANOMALY] " + name + " :: " + text);
+}
+
+function exception(name, e) {
+    exceptions++;
+    log("[EXCEPTION] " + name + " :: " + e);
+}
+
+function svgElement(name) {
+    return document.createElementNS(NS, name);
+}
+
+function forceLayout(node) {
     try {
-
-        const raw =
-            localStorage.getItem(KEY);
-
-        if (!raw)
-            return;
-
-        const x =
-            JSON.parse(raw);
-
-        if (x.status !== "RUNNING")
-            return;
-
-        log(
-            "******************************",
-            "bad"
-        );
-
-        log(
-            "PREVIOUS V25 DID NOT COMPLETE",
-            "bad"
-        );
-
-        log(
-            "TEST: " + x.test,
-            "bad"
-        );
-
-        log(
-            "LAST PHASE: " + x.phase,
-            "bad"
-        );
-
-        if (x.detail)
-            log(
-                "DETAIL: " + x.detail,
-                "bad"
-            );
-
-        log(
-            "******************************",
-            "bad"
-        );
-
-    } catch(e) {}
+        void node.getBoundingClientRect();
+        void document.body.offsetHeight;
+    } catch (_) {}
 }
 
-function finished() {
-
+function cleanup(node) {
     try {
-
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"COMPLETE",
-                time:Date.now()
-            })
-        );
-
-    } catch(e) {}
+        if (node && node.parentNode)
+            node.parentNode.removeChild(node);
+    } catch (_) {}
 }
 
-function delay(ms) {
-
-    return new Promise(
-        resolve => setTimeout(resolve, ms)
-    );
-}
-
-function reset() {
-    sandbox.innerHTML = "";
+async function delay(ms) {
+    return new Promise(r => setTimeout(r, ms));
 }
 
 
-/*
- * TEST A
- *
- * MutationObserver callback removes
- * the Shadow DOM host while mutation
- * delivery is occurring.
- */
+/* ---------------------------------------------------------
+   A - remove animation target from beginEvent
+   --------------------------------------------------------- */
 
 async function testA() {
 
-    const name =
-        "A_MUTATION_SHADOW_REMOVE";
+    const name = "A_REMOVE_TARGET_BEGIN";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    cp(name,"CREATE_HOST");
+    let svg, rect, anim;
 
-    const host =
-        document.createElement("div");
+    try {
 
-    sandbox.appendChild(host);
+        svg = svgElement("svg");
+        svg.setAttribute("width", "100");
+        svg.setAttribute("height", "100");
 
-    const shadow =
-        host.attachShadow({
-            mode:"open"
+        rect = svgElement("rect");
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
+
+        anim = svgElement("animate");
+
+        anim.setAttribute("attributeName", "x");
+        anim.setAttribute("from", "0");
+        anim.setAttribute("to", "50");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
+
+        rect.appendChild(anim);
+        svg.appendChild(rect);
+        document.body.appendChild(svg);
+
+        let fired = false;
+
+        anim.addEventListener("beginEvent", function () {
+
+            fired = true;
+
+            checkpoint(name, "BEGIN_ENTER");
+
+            rect.remove();
+
+            checkpoint(name, "TARGET_REMOVED");
+
+            /* retained references */
+            void rect.ownerDocument;
+            void anim.ownerDocument;
+
+            forceLayout(svg);
+
+            checkpoint(name, "BEGIN_EXIT");
         });
 
-    const child =
-        document.createElement("span");
+        checkpoint(name, "BEGIN_CALL");
 
-    child.textContent = "V25-A";
+        anim.beginElement();
 
-    shadow.appendChild(child);
+        await delay(120);
 
-    let callbacks = 0;
+        checkpoint(name, "VERIFY");
 
-    const observer =
-        new MutationObserver(
-            function(records) {
+        if (!fired)
+            log("[INFO] beginEvent not dispatched");
 
-                callbacks++;
+        ok(name);
 
-                cp(
-                    name,
-                    "OBSERVER_ENTER",
-                    "records=" + records.length
-                );
+    } catch(e) {
 
-                cp(
-                    name,
-                    "REMOVE_HOST"
-                );
+        exception(name, e);
 
-                host.remove();
+    } finally {
 
-                cp(
-                    name,
-                    "READ_RETAINED_SHADOW"
-                );
-
-                void shadow.childNodes.length;
-                void child.textContent;
-
-                cp(
-                    name,
-                    "OBSERVER_EXIT"
-                );
-            }
-        );
-
-    observer.observe(
-        shadow,
-        {
-            childList:true,
-            subtree:true,
-            characterData:true
-        }
-    );
-
-    cp(name,"MUTATE");
-
-    child.textContent =
-        "V25-A-MUTATED";
-
-    cp(name,"MUTATE_RETURNED");
-
-    await Promise.resolve();
-    await delay(50);
-
-    observer.disconnect();
-
-    if (callbacks !== 1) {
-
-        anomalies++;
-
-        log(
-            "Unexpected callback count: " +
-            callbacks,
-            "bad"
-        );
+        cleanup(svg);
     }
-
-    if (
-        child.textContent !==
-        "V25-A-MUTATED"
-    ) {
-
-        anomalies++;
-
-        log(
-            "Retained child mismatch",
-            "bad"
-        );
-    }
-
-    cp(name,"COMPLETE");
-
-    pass++;
 }
 
 
-/*
- * TEST B
- *
- * MutationObserver callback replaces
- * the contents of its observed
- * ShadowRoot.
- */
+/* ---------------------------------------------------------
+   B - remove entire SVG tree from animation callback
+   --------------------------------------------------------- */
 
 async function testB() {
 
-    const name =
-        "B_SHADOW_REPLACE";
+    const name = "B_REMOVE_SVG_BEGIN";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    cp(name,"CREATE");
+    let svg, path, anim;
 
-    const host =
-        document.createElement("div");
+    try {
 
-    sandbox.appendChild(host);
+        svg = svgElement("svg");
 
-    const shadow =
-        host.attachShadow({
-            mode:"open"
+        path = svgElement("path");
+        path.setAttribute("d", "M0 0 L50 50");
+
+        anim = svgElement("animate");
+
+        anim.setAttribute("attributeName", "opacity");
+        anim.setAttribute("from", "1");
+        anim.setAttribute("to", "0");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
+
+        path.appendChild(anim);
+        svg.appendChild(path);
+        document.body.appendChild(svg);
+
+        anim.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "CALLBACK_ENTER");
+
+            svg.remove();
+
+            checkpoint(name, "SVG_REMOVED");
+
+            /* Read retained wrappers after removal. */
+            void path.getAttribute("d");
+            void anim.getAttribute("dur");
+
+            forceLayout(document.body);
+
+            checkpoint(name, "CALLBACK_EXIT");
         });
 
-    const original =
-        document.createElement("div");
+        anim.beginElement();
 
-    original.textContent =
-        "ORIGINAL";
+        await delay(120);
 
-    shadow.appendChild(original);
+        checkpoint(name, "VERIFY");
 
-    let first = true;
+        ok(name);
 
-    const observer =
-        new MutationObserver(
-            function(records) {
+    } catch(e) {
 
-                cp(
-                    name,
-                    "OBSERVER_ENTER",
-                    "records=" + records.length
-                );
+        exception(name, e);
 
-                if (first) {
+    } finally {
 
-                    first = false;
-
-                    cp(
-                        name,
-                        "REPLACE_CHILDREN"
-                    );
-
-                    shadow.innerHTML =
-                        "<span>REPLACEMENT</span>";
-
-                    cp(
-                        name,
-                        "READ_OLD_NODE"
-                    );
-
-                    void original.textContent;
-                    void original.ownerDocument;
-                }
-
-                cp(
-                    name,
-                    "OBSERVER_EXIT"
-                );
-            }
-        );
-
-    observer.observe(
-        shadow,
-        {
-            childList:true,
-            subtree:true,
-            characterData:true
-        }
-    );
-
-    cp(name,"TRIGGER");
-
-    original.textContent =
-        "TRIGGER";
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    observer.disconnect();
-
-    cp(name,"CHECK");
-
-    if (
-        shadow.textContent !==
-        "REPLACEMENT"
-    ) {
-
-        anomalies++;
-
-        log(
-            "Shadow replacement mismatch",
-            "bad"
-        );
+        cleanup(svg);
     }
-
-    host.remove();
-
-    cp(name,"COMPLETE");
-
-    pass++;
 }
 
 
-/*
- * TEST C
- *
- * Slot redistribution while nodes
- * and host are being changed.
- */
+/* ---------------------------------------------------------
+   C - replace target subtree during callback
+   --------------------------------------------------------- */
 
 async function testC() {
 
-    const name =
-        "C_SLOT_REDISTRIBUTION";
+    const name = "C_REPLACE_SUBTREE";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    cp(name,"CREATE_HOST");
+    let svg, group, rect, anim;
 
-    const host =
-        document.createElement("div");
+    try {
 
-    const shadow =
-        host.attachShadow({
-            mode:"open"
+        svg = svgElement("svg");
+        group = svgElement("g");
+        rect = svgElement("rect");
+
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
+
+        anim = svgElement("animate");
+
+        anim.setAttribute("attributeName", "width");
+        anim.setAttribute("from", "20");
+        anim.setAttribute("to", "80");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
+
+        rect.appendChild(anim);
+        group.appendChild(rect);
+        svg.appendChild(group);
+        document.body.appendChild(svg);
+
+        anim.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "CALLBACK_ENTER");
+
+            const oldRect = rect;
+
+            group.textContent = "";
+
+            checkpoint(name, "SUBTREE_CLEARED");
+
+            const replacement = svgElement("circle");
+            replacement.setAttribute("r", "10");
+
+            group.appendChild(replacement);
+
+            /* retained old wrapper */
+            void oldRect.ownerSVGElement;
+            void anim.ownerSVGElement;
+
+            forceLayout(svg);
+
+            checkpoint(name, "CALLBACK_EXIT");
         });
 
-    shadow.innerHTML =
-        "<slot name='a'></slot>" +
-        "<slot name='b'></slot>";
+        anim.beginElement();
 
-    const one =
-        document.createElement("span");
+        await delay(120);
 
-    one.slot = "a";
-    one.textContent = "ONE";
+        checkpoint(name, "VERIFY");
 
-    const two =
-        document.createElement("span");
+        ok(name);
 
-    two.slot = "b";
-    two.textContent = "TWO";
+    } catch(e) {
 
-    host.appendChild(one);
-    host.appendChild(two);
+        exception(name, e);
 
-    sandbox.appendChild(host);
+    } finally {
 
-    const slots =
-        shadow.querySelectorAll("slot");
-
-    cp(name,"INITIAL_ASSIGNMENT");
-
-    void slots[0].assignedNodes();
-    void slots[1].assignedNodes();
-
-    cp(name,"MOVE_SLOT");
-
-    one.slot = "b";
-    two.slot = "a";
-
-    await Promise.resolve();
-
-    cp(name,"READ_ASSIGNMENT");
-
-    const a =
-        slots[0].assignedNodes();
-
-    const b =
-        slots[1].assignedNodes();
-
-    cp(name,"REMOVE_HOST");
-
-    host.remove();
-
-    cp(name,"READ_AFTER_REMOVE");
-
-    void a.length;
-    void b.length;
-    void one.textContent;
-    void two.textContent;
-    void shadow.childNodes.length;
-
-    cp(name,"COMPLETE");
-
-    pass++;
+        cleanup(svg);
+    }
 }
 
 
-/*
- * TEST D
- *
- * ResizeObserver callback removes
- * its own observed host.
- */
+/* ---------------------------------------------------------
+   D - reparent animation element during callback
+   --------------------------------------------------------- */
 
 async function testD() {
 
-    const name =
-        "D_RESIZE_REMOVE";
+    const name = "D_REPARENT_ANIMATION";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    if (
-        typeof ResizeObserver ===
-        "undefined"
-    ) {
+    let svg, a, b, anim;
 
-        cp(name,"UNSUPPORTED");
+    try {
 
-        pass++;
-        return;
-    }
+        svg = svgElement("svg");
 
-    cp(name,"CREATE");
+        a = svgElement("rect");
+        b = svgElement("rect");
 
-    const host =
-        document.createElement("div");
+        a.setAttribute("width", "20");
+        b.setAttribute("width", "30");
 
-    host.style.width = "100px";
-    host.style.height = "20px";
+        anim = svgElement("animate");
 
-    const shadow =
-        host.attachShadow({
-            mode:"open"
+        anim.setAttribute("attributeName", "width");
+        anim.setAttribute("from", "20");
+        anim.setAttribute("to", "60");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
+
+        a.appendChild(anim);
+
+        svg.appendChild(a);
+        svg.appendChild(b);
+
+        document.body.appendChild(svg);
+
+        anim.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "CALLBACK_ENTER");
+
+            b.appendChild(anim);
+
+            checkpoint(name, "ANIMATION_REPARENTED");
+
+            void a.getBoundingClientRect();
+            void b.getBoundingClientRect();
+
+            forceLayout(svg);
+
+            checkpoint(name, "CALLBACK_EXIT");
         });
 
-    shadow.innerHTML =
-        "<div>RESIZE</div>";
+        anim.beginElement();
 
-    sandbox.appendChild(host);
+        await delay(120);
 
-    let removed = false;
+        checkpoint(name, "VERIFY");
 
-    const ro =
-        new ResizeObserver(
-            function(entries) {
+        ok(name);
 
-                cp(
-                    name,
-                    "RESIZE_ENTER",
-                    "entries=" + entries.length
-                );
+    } catch(e) {
 
-                if (!removed) {
+        exception(name, e);
 
-                    removed = true;
+    } finally {
 
-                    cp(
-                        name,
-                        "REMOVE_HOST"
-                    );
-
-                    host.remove();
-
-                    cp(
-                        name,
-                        "READ_RETAINED"
-                    );
-
-                    void shadow.textContent;
-                    void host.ownerDocument;
-                }
-
-                cp(
-                    name,
-                    "RESIZE_EXIT"
-                );
-            }
-        );
-
-    ro.observe(host);
-
-    cp(name,"CHANGE_SIZE");
-
-    host.style.width =
-        "150px";
-
-    await delay(250);
-
-    ro.disconnect();
-
-    cp(name,"COMPLETE");
-
-    pass++;
+        cleanup(svg);
+    }
 }
 
 
-/*
- * TEST E
- *
- * Custom-element disconnectedCallback
- * performs synchronous DOM mutation.
- */
+/* ---------------------------------------------------------
+   E - animation end callback removes parent
+   --------------------------------------------------------- */
 
 async function testE() {
 
-    const name =
-        "E_CUSTOM_ELEMENT_REMOVE";
+    const name = "E_REMOVE_PARENT_END";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    if (
-        !window.customElements
-    ) {
+    let svg, group, rect, anim;
 
-        cp(name,"UNSUPPORTED");
+    try {
 
-        pass++;
-        return;
+        svg = svgElement("svg");
+        group = svgElement("g");
+        rect = svgElement("rect");
+
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
+
+        anim = svgElement("animate");
+
+        anim.setAttribute("attributeName", "opacity");
+        anim.setAttribute("from", "1");
+        anim.setAttribute("to", "0");
+        anim.setAttribute("dur", "0.03s");
+        anim.setAttribute("begin", "indefinite");
+
+        rect.appendChild(anim);
+        group.appendChild(rect);
+        svg.appendChild(group);
+
+        document.body.appendChild(svg);
+
+        anim.addEventListener("endEvent", function () {
+
+            checkpoint(name, "END_ENTER");
+
+            group.remove();
+
+            checkpoint(name, "GROUP_REMOVED");
+
+            void rect.ownerDocument;
+            void anim.ownerDocument;
+
+            forceLayout(svg);
+
+            checkpoint(name, "END_EXIT");
+        });
+
+        anim.beginElement();
+
+        await delay(150);
+
+        checkpoint(name, "VERIFY");
+
+        ok(name);
+
+    } catch(e) {
+
+        exception(name, e);
+
+    } finally {
+
+        cleanup(svg);
     }
-
-    const tag =
-        "v25-element";
-
-    if (
-        !customElements.get(tag)
-    ) {
-
-        class V25Element
-            extends HTMLElement {
-
-            connectedCallback() {
-
-                cp(
-                    name,
-                    "CONNECTED"
-                );
-            }
-
-            disconnectedCallback() {
-
-                cp(
-                    name,
-                    "DISCONNECTED_ENTER"
-                );
-
-                const marker =
-                    document.createElement(
-                        "span"
-                    );
-
-                marker.textContent =
-                    "DISCONNECTED_OK";
-
-                sandbox.appendChild(
-                    marker
-                );
-
-                cp(
-                    name,
-                    "DISCONNECTED_EXIT"
-                );
-            }
-        }
-
-        customElements.define(
-            tag,
-            V25Element
-        );
-    }
-
-    cp(name,"CREATE");
-
-    const element =
-        document.createElement(tag);
-
-    sandbox.appendChild(element);
-
-    cp(name,"REMOVE");
-
-    element.remove();
-
-    cp(name,"REMOVE_RETURNED");
-
-    if (
-        sandbox.textContent
-            .indexOf(
-                "DISCONNECTED_OK"
-            ) === -1
-    ) {
-
-        anomalies++;
-
-        log(
-            "Disconnected callback mismatch",
-            "bad"
-        );
-    }
-
-    cp(name,"READ_RETAINED_ELEMENT");
-
-    void element.ownerDocument;
-    void element.isConnected;
-
-    cp(name,"COMPLETE");
-
-    pass++;
 }
 
 
-/*
- * TEST F
- *
- * Observer callback removes the
- * observed subtree and then creates
- * another Shadow DOM subtree.
- */
+/* ---------------------------------------------------------
+   F - nested/re-entrant animation start
+   --------------------------------------------------------- */
 
 async function testF() {
 
-    const name =
-        "F_OBSERVER_REENTRANCY";
+    const name = "F_NESTED_BEGIN";
 
-    reset();
+    checkpoint(name, "CREATE");
 
-    cp(name,"CREATE");
+    let svg, r1, r2, a1, a2;
 
-    const outer =
-        document.createElement("div");
+    try {
 
-    const host =
-        document.createElement("div");
+        svg = svgElement("svg");
 
-    outer.appendChild(host);
-    sandbox.appendChild(outer);
+        r1 = svgElement("rect");
+        r2 = svgElement("rect");
 
-    const shadow =
-        host.attachShadow({
-            mode:"open"
+        r1.setAttribute("width", "10");
+        r2.setAttribute("width", "10");
+
+        a1 = svgElement("animate");
+        a2 = svgElement("animate");
+
+        for (const a of [a1, a2]) {
+
+            a.setAttribute("attributeName", "width");
+            a.setAttribute("from", "10");
+            a.setAttribute("to", "50");
+            a.setAttribute("dur", "0.05s");
+            a.setAttribute("begin", "indefinite");
+        }
+
+        r1.appendChild(a1);
+        r2.appendChild(a2);
+
+        svg.appendChild(r1);
+        svg.appendChild(r2);
+
+        document.body.appendChild(svg);
+
+        let nested = false;
+
+        a1.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "A1_ENTER");
+
+            if (!nested) {
+
+                nested = true;
+
+                checkpoint(name, "START_A2");
+
+                a2.beginElement();
+            }
+
+            r1.remove();
+
+            checkpoint(name, "R1_REMOVED");
+
+            forceLayout(svg);
+
+            checkpoint(name, "A1_EXIT");
         });
 
-    const node =
-        document.createElement("span");
+        a2.addEventListener("beginEvent", function () {
 
-    node.textContent =
-        "START";
+            checkpoint(name, "A2_ENTER");
 
-    shadow.appendChild(node);
+            void r1.ownerDocument;
+            void r2.ownerDocument;
 
-    let entered = false;
+            forceLayout(svg);
 
-    const observer =
-        new MutationObserver(
-            function(records) {
+            checkpoint(name, "A2_EXIT");
+        });
 
-                cp(
-                    name,
-                    "OBSERVER_ENTER"
-                );
+        a1.beginElement();
 
-                if (!entered) {
+        await delay(150);
 
-                    entered = true;
+        checkpoint(name, "VERIFY");
 
-                    cp(
-                        name,
-                        "REMOVE_OUTER"
-                    );
+        ok(name);
 
-                    outer.remove();
+    } catch(e) {
 
-                    cp(
-                        name,
-                        "CREATE_SECOND_HOST"
-                    );
+        exception(name, e);
 
-                    const second =
-                        document.createElement(
-                            "div"
-                        );
+    } finally {
 
-                    sandbox.appendChild(
-                        second
-                    );
-
-                    const secondShadow =
-                        second.attachShadow({
-                            mode:"open"
-                        });
-
-                    secondShadow.innerHTML =
-                        "<b>SECOND</b>";
-
-                    cp(
-                        name,
-                        "READ_OLD_REFERENCES"
-                    );
-
-                    void shadow.textContent;
-                    void node.textContent;
-                    void outer.ownerDocument;
-
-                    second.remove();
-                }
-
-                cp(
-                    name,
-                    "OBSERVER_EXIT"
-                );
-            }
-        );
-
-    observer.observe(
-        shadow,
-        {
-            subtree:true,
-            childList:true,
-            characterData:true
-        }
-    );
-
-    cp(name,"TRIGGER");
-
-    node.textContent =
-        "CHANGED";
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    observer.disconnect();
-
-    cp(name,"COMPLETE");
-
-    pass++;
+        cleanup(svg);
+    }
 }
 
 
-async function runV25() {
+async function run() {
 
-    out.innerHTML = "";
-    sandbox.innerHTML = "";
+    document.querySelector("#run").disabled = true;
 
-    previous();
-
-    seq = 0;
     pass = 0;
     exceptions = 0;
     anomalies = 0;
 
-    log(
-        "V25 START",
-        "info"
-    );
+    logBox.textContent = "";
 
+    const old = localStorage.getItem("PS5_V26_CHECKPOINT");
+
+    if (old)
+        log("Previous checkpoint: " + old);
+
+    log("User agent:");
     log(navigator.userAgent);
     log("");
 
-    try {
+    log("SVGElement: " + typeof SVGElement);
+    log("SVGPathElement: " + typeof SVGPathElement);
+    log("SVGAnimationElement: " + typeof SVGAnimationElement);
 
-        await testA();
-        await delay(100);
+    log("");
+    log("Starting V26...");
+    log("");
 
-        await testB();
-        await delay(100);
+    await testA();
+    await testB();
+    await testC();
+    await testD();
+    await testE();
+    await testF();
 
-        await testC();
-        await delay(100);
+    checkpoint("V26", "COMPLETE");
 
-        await testD();
-        await delay(100);
+    statusBox.textContent =
+        anomalies || exceptions ?
+        "STATUS: ANOMALY" :
+        "STATUS: NORMAL";
 
-        await testE();
-        await delay(100);
+    log("");
+    log("==============================");
+    log("TESTS COMPLETED: 6");
+    log("PASS: " + pass);
+    log("EXCEPTIONS: " + exceptions);
+    log("ANOMALIES: " + anomalies);
+    log("==============================");
 
-        await testF();
-
-        finished();
-
-        log("");
-        log(
-            "======= V25 RESULT =======",
-            "info"
-        );
-
-        log(
-            "STATUS: " +
-            (
-                anomalies === 0
-                    ? "NORMAL"
-                    : "ANOMALY"
-            ),
-            anomalies === 0
-                ? "ok"
-                : "bad"
-        );
-
-        log(
-            "TESTS COMPLETED: 6"
-        );
-
-        log(
-            "PASS: " + pass
-        );
-
-        log(
-            "EXCEPTIONS: " +
-            exceptions
-        );
-
-        log(
-            "ANOMALIES: " +
-            anomalies
-        );
-
-        log(
-            "==========================",
-            "info"
-        );
-
-    } catch(e) {
-
-        exceptions++;
-
-        cp(
-            "HARNESS",
-            "UNCAUGHT_EXCEPTION",
-            e.name + ": " +
-            e.message
-        );
-
-        log("");
-        log(
-            "V25 STOPPED",
-            "bad"
-        );
-
-        log(
-            e.name + ": " +
-            e.message,
-            "bad"
-        );
-    }
+    document.querySelector("#run").disabled = false;
 }
 
-previous();
-
+document.querySelector("#run").onclick = run;
 </script>
-</body>
-</html>
