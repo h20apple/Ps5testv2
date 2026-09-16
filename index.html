@@ -1,12 +1,12 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V26 SVG/SMIL Lifecycle Probe</title>
+<title>PS5 13.60 - V31 Range createContextualFragment Probe</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
-    font:16px monospace;
+    font:15px monospace;
     padding:18px;
 }
 button {
@@ -14,27 +14,20 @@ button {
     padding:10px 18px;
 }
 #status {
-    margin:16px 0;
-    padding:12px;
+    margin:15px 0;
+    padding:10px;
     border:1px solid #555;
 }
 pre {
     white-space:pre-wrap;
     word-break:break-word;
 }
-svg {
-    position:absolute;
-    left:-10000px;
-    top:-10000px;
-}
 </style>
 
-<h2>PS5 WebKit V26</h2>
-<div>SVG / SMIL lifecycle & re-entrancy probe</div>
+<h2>PS5 13.60 — V31</h2>
+<div>Range.createContextualFragment lifetime probe</div>
 
-<p>
-<button id="run">RUN V26</button>
-</p>
+<p><button id="run">RUN V31</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -42,555 +35,620 @@ svg {
 <script>
 "use strict";
 
-const logBox = document.querySelector("#log");
-const statusBox = document.querySelector("#status");
-const NS = "http://www.w3.org/2000/svg";
+/*
+ * V31
+ *
+ * Inspired by WebKit bug 312244:
+ * "Use-after-free of Node in
+ * Range::createContextualFragment"
+ *
+ * This is a browser-visible diagnostic.
+ *
+ * It does NOT perform heap reclamation,
+ * spraying, address disclosure or memory
+ * read/write primitive construction.
+ */
+
+const out =
+    document.querySelector("#log");
+
+const statusBox =
+    document.querySelector("#status");
+
+const button =
+    document.querySelector("#run");
 
 let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
-let current = "NONE";
 
 function log(s) {
-    logBox.textContent += s + "\n";
+    out.textContent += s + "\n";
     console.log(s);
 }
 
-function checkpoint(name, stage) {
-    current = name + ":" + stage;
-
+function cp(s) {
     try {
-        localStorage.setItem("PS5_V26_CHECKPOINT", current);
+        localStorage.setItem(
+            "PS5_V31_CP",
+            s
+        );
     } catch (_) {}
 
-    log("[CP] " + current);
+    log("[CP] " + s);
 }
 
-function ok(name) {
+function good(s) {
     pass++;
-    log("[PASS] " + name);
+    log("[PASS] " + s);
 }
 
-function anomaly(name, text) {
+function bad(s, reason) {
     anomalies++;
-    log("[ANOMALY] " + name + " :: " + text);
+    log(
+        "[ANOMALY] " +
+        s +
+        " :: " +
+        reason
+    );
 }
 
-function exception(name, e) {
+function caught(s, e) {
     exceptions++;
-    log("[EXCEPTION] " + name + " :: " + e);
+    log(
+        "[EXCEPTION] " +
+        s +
+        " :: " +
+        e
+    );
 }
 
-function svgElement(name) {
-    return document.createElementNS(NS, name);
-}
-
-function forceLayout(node) {
-    try {
-        void node.getBoundingClientRect();
-        void document.body.offsetHeight;
-    } catch (_) {}
-}
-
-function cleanup(node) {
-    try {
-        if (node && node.parentNode)
-            node.parentNode.removeChild(node);
-    } catch (_) {}
-}
-
-async function delay(ms) {
-    return new Promise(r => setTimeout(r, ms));
+function sleep(ms) {
+    return new Promise(
+        r => setTimeout(r, ms)
+    );
 }
 
 
-/* ---------------------------------------------------------
-   A - remove animation target from beginEvent
-   --------------------------------------------------------- */
+/* --------------------------------
+   A — capability
+-------------------------------- */
 
 async function testA() {
 
-    const name = "A_REMOVE_TARGET_BEGIN";
+    const name =
+        "A_CAPABILITY";
 
-    checkpoint(name, "CREATE");
-
-    let svg, rect, anim;
+    cp(name + ":START");
 
     try {
 
-        svg = svgElement("svg");
-        svg.setAttribute("width", "100");
-        svg.setAttribute("height", "100");
+        const r =
+            document.createRange();
 
-        rect = svgElement("rect");
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
+        log(
+            "[A] createContextualFragment=" +
+            typeof r.createContextualFragment
+        );
 
-        anim = svgElement("animate");
+        log(
+            "[A] trustedTypes=" +
+            typeof window.trustedTypes
+        );
 
-        anim.setAttribute("attributeName", "x");
-        anim.setAttribute("from", "0");
-        anim.setAttribute("to", "50");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
+        log(
+            "[A] TrustedHTML=" +
+            typeof window.TrustedHTML
+        );
 
-        rect.appendChild(anim);
-        svg.appendChild(rect);
-        document.body.appendChild(svg);
+        if (
+            typeof r.createContextualFragment
+            !== "function"
+        ) {
+            bad(
+                name,
+                "API missing"
+            );
+            return;
+        }
 
-        let fired = false;
-
-        anim.addEventListener("beginEvent", function () {
-
-            fired = true;
-
-            checkpoint(name, "BEGIN_ENTER");
-
-            rect.remove();
-
-            checkpoint(name, "TARGET_REMOVED");
-
-            /* retained references */
-            void rect.ownerDocument;
-            void anim.ownerDocument;
-
-            forceLayout(svg);
-
-            checkpoint(name, "BEGIN_EXIT");
-        });
-
-        checkpoint(name, "BEGIN_CALL");
-
-        anim.beginElement();
-
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        if (!fired)
-            log("[INFO] beginEvent not dispatched");
-
-        ok(name);
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
-/* ---------------------------------------------------------
-   B - remove entire SVG tree from animation callback
-   --------------------------------------------------------- */
+/* --------------------------------
+   B — ordinary contextual fragment
+-------------------------------- */
 
 async function testB() {
 
-    const name = "B_REMOVE_SVG_BEGIN";
+    const name =
+        "B_BASIC_FRAGMENT";
 
-    checkpoint(name, "CREATE");
-
-    let svg, path, anim;
+    cp(name + ":CREATE");
 
     try {
 
-        svg = svgElement("svg");
+        const host =
+            document.createElement("div");
 
-        path = svgElement("path");
-        path.setAttribute("d", "M0 0 L50 50");
+        host.innerHTML =
+            "<div id='ctx'>context</div>";
 
-        anim = svgElement("animate");
+        document.body.appendChild(host);
 
-        anim.setAttribute("attributeName", "opacity");
-        anim.setAttribute("from", "1");
-        anim.setAttribute("to", "0");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
+        const ctx =
+            host.firstChild;
 
-        path.appendChild(anim);
-        svg.appendChild(path);
-        document.body.appendChild(svg);
+        const range =
+            document.createRange();
 
-        anim.addEventListener("beginEvent", function () {
+        range.selectNodeContents(ctx);
 
-            checkpoint(name, "CALLBACK_ENTER");
+        cp(name + ":BEFORE_CREATE");
 
-            svg.remove();
+        const fragment =
+            range.createContextualFragment(
+                "<span id='v31b'>hello</span>"
+            );
 
-            checkpoint(name, "SVG_REMOVED");
+        cp(name + ":AFTER_CREATE");
 
-            /* Read retained wrappers after removal. */
-            void path.getAttribute("d");
-            void anim.getAttribute("dur");
+        const node =
+            fragment.firstChild;
 
-            forceLayout(document.body);
+        log(
+            "[B] node=" +
+            node.nodeName
+        );
 
-            checkpoint(name, "CALLBACK_EXIT");
-        });
+        log(
+            "[B] text=" +
+            node.textContent
+        );
 
-        anim.beginElement();
+        ctx.appendChild(fragment);
 
-        await delay(120);
+        log(
+            "[B] inserted=" +
+            !!document.getElementById(
+                "v31b"
+            )
+        );
 
-        checkpoint(name, "VERIFY");
+        host.remove();
 
-        ok(name);
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
-/* ---------------------------------------------------------
-   C - replace target subtree during callback
-   --------------------------------------------------------- */
+/* --------------------------------
+   C — remove context before use
+-------------------------------- */
 
 async function testC() {
 
-    const name = "C_REPLACE_SUBTREE";
+    const name =
+        "C_REMOVE_CONTEXT";
 
-    checkpoint(name, "CREATE");
-
-    let svg, group, rect, anim;
+    cp(name + ":CREATE");
 
     try {
 
-        svg = svgElement("svg");
-        group = svgElement("g");
-        rect = svgElement("rect");
+        const host =
+            document.createElement("section");
 
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
+        const context =
+            document.createElement("div");
 
-        anim = svgElement("animate");
+        context.textContent =
+            "V31 context";
 
-        anim.setAttribute("attributeName", "width");
-        anim.setAttribute("from", "20");
-        anim.setAttribute("to", "80");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
+        host.appendChild(context);
 
-        rect.appendChild(anim);
-        group.appendChild(rect);
-        svg.appendChild(group);
-        document.body.appendChild(svg);
+        document.body.appendChild(host);
 
-        anim.addEventListener("beginEvent", function () {
+        const range =
+            document.createRange();
 
-            checkpoint(name, "CALLBACK_ENTER");
+        range.selectNodeContents(context);
 
-            const oldRect = rect;
+        cp(name + ":REMOVE_CONTEXT");
 
-            group.textContent = "";
+        host.remove();
 
-            checkpoint(name, "SUBTREE_CLEARED");
+        log(
+            "[C] context connected=" +
+            context.isConnected
+        );
 
-            const replacement = svgElement("circle");
-            replacement.setAttribute("r", "10");
+        cp(name + ":CREATE_FRAGMENT");
 
-            group.appendChild(replacement);
+        const fragment =
+            range.createContextualFragment(
+                "<b>detached-context</b>"
+            );
 
-            /* retained old wrapper */
-            void oldRect.ownerSVGElement;
-            void anim.ownerSVGElement;
+        cp(name + ":CREATED");
 
-            forceLayout(svg);
+        log(
+            "[C] children=" +
+            fragment.childNodes.length
+        );
 
-            checkpoint(name, "CALLBACK_EXIT");
-        });
+        log(
+            "[C] text=" +
+            fragment.textContent
+        );
 
-        anim.beginElement();
+        log(
+            "[C] range collapsed=" +
+            range.collapsed
+        );
 
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
-/* ---------------------------------------------------------
-   D - reparent animation element during callback
-   --------------------------------------------------------- */
+/* --------------------------------
+   D — mutation immediately before call
+-------------------------------- */
 
 async function testD() {
 
-    const name = "D_REPARENT_ANIMATION";
+    const name =
+        "D_CONTEXT_MUTATION";
 
-    checkpoint(name, "CREATE");
-
-    let svg, a, b, anim;
+    cp(name + ":CREATE");
 
     try {
 
-        svg = svgElement("svg");
+        const outer =
+            document.createElement("div");
 
-        a = svgElement("rect");
-        b = svgElement("rect");
+        outer.innerHTML =
+            "<div><span>AAAA</span></div>";
 
-        a.setAttribute("width", "20");
-        b.setAttribute("width", "30");
+        document.body.appendChild(outer);
 
-        anim = svgElement("animate");
+        const context =
+            outer.firstChild;
 
-        anim.setAttribute("attributeName", "width");
-        anim.setAttribute("from", "20");
-        anim.setAttribute("to", "60");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
+        const retained =
+            context.firstChild;
 
-        a.appendChild(anim);
+        const range =
+            document.createRange();
 
-        svg.appendChild(a);
-        svg.appendChild(b);
+        range.selectNodeContents(context);
 
-        document.body.appendChild(svg);
+        cp(name + ":MUTATE");
 
-        anim.addEventListener("beginEvent", function () {
+        context.innerHTML =
+            "<em>BBBB</em>";
 
-            checkpoint(name, "CALLBACK_ENTER");
+        log(
+            "[D] retained connected=" +
+            retained.isConnected
+        );
 
-            b.appendChild(anim);
+        cp(name + ":CREATE_FRAGMENT");
 
-            checkpoint(name, "ANIMATION_REPARENTED");
+        const fragment =
+            range.createContextualFragment(
+                "<strong>CCCC</strong>"
+            );
 
-            void a.getBoundingClientRect();
-            void b.getBoundingClientRect();
+        cp(name + ":AFTER_CREATE");
 
-            forceLayout(svg);
+        log(
+            "[D] fragment=" +
+            fragment.textContent
+        );
 
-            checkpoint(name, "CALLBACK_EXIT");
-        });
+        log(
+            "[D] context=" +
+            context.textContent
+        );
 
-        anim.beginElement();
+        log(
+            "[D] retained=" +
+            retained.textContent
+        );
 
-        await delay(120);
+        outer.remove();
 
-        checkpoint(name, "VERIFY");
-
-        ok(name);
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
-/* ---------------------------------------------------------
-   E - animation end callback removes parent
-   --------------------------------------------------------- */
+/* --------------------------------
+   E — custom element parser callback
+-------------------------------- */
 
 async function testE() {
 
-    const name = "E_REMOVE_PARENT_END";
+    const name =
+        "E_CUSTOM_ELEMENT_CALLBACK";
 
-    checkpoint(name, "CREATE");
-
-    let svg, group, rect, anim;
+    cp(name + ":CREATE");
 
     try {
 
-        svg = svgElement("svg");
-        group = svgElement("g");
-        rect = svgElement("rect");
+        if (
+            !window.customElements
+        ) {
+            log(
+                "[E] customElements unavailable"
+            );
 
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
+            good(name);
+            return;
+        }
 
-        anim = svgElement("animate");
+        if (
+            !customElements.get(
+                "v31-callback"
+            )
+        ) {
 
-        anim.setAttribute("attributeName", "opacity");
-        anim.setAttribute("from", "1");
-        anim.setAttribute("to", "0");
-        anim.setAttribute("dur", "0.03s");
-        anim.setAttribute("begin", "indefinite");
+            class V31Callback
+                extends HTMLElement {
 
-        rect.appendChild(anim);
-        group.appendChild(rect);
-        svg.appendChild(group);
+                constructor() {
+                    super();
 
-        document.body.appendChild(svg);
+                    window.__v31ConstructorCount =
+                        (
+                            window.__v31ConstructorCount
+                            || 0
+                        ) + 1;
 
-        anim.addEventListener("endEvent", function () {
+                    cp(
+                        name +
+                        ":CONSTRUCTOR"
+                    );
+                }
 
-            checkpoint(name, "END_ENTER");
+                connectedCallback() {
 
-            group.remove();
+                    window.__v31ConnectedCount =
+                        (
+                            window.__v31ConnectedCount
+                            || 0
+                        ) + 1;
 
-            checkpoint(name, "GROUP_REMOVED");
+                    cp(
+                        name +
+                        ":CONNECTED"
+                    );
+                }
+            }
 
-            void rect.ownerDocument;
-            void anim.ownerDocument;
+            customElements.define(
+                "v31-callback",
+                V31Callback
+            );
+        }
 
-            forceLayout(svg);
+        window.__v31ConstructorCount = 0;
+        window.__v31ConnectedCount = 0;
 
-            checkpoint(name, "END_EXIT");
-        });
+        const host =
+            document.createElement("div");
 
-        anim.beginElement();
+        document.body.appendChild(host);
 
-        await delay(150);
+        const range =
+            document.createRange();
 
-        checkpoint(name, "VERIFY");
+        range.selectNodeContents(host);
 
-        ok(name);
+        cp(name + ":BEFORE_CREATE");
+
+        const fragment =
+            range.createContextualFragment(
+                "<v31-callback>" +
+                "callback" +
+                "</v31-callback>"
+            );
+
+        cp(name + ":AFTER_CREATE");
+
+        log(
+            "[E] constructors=" +
+            window.__v31ConstructorCount
+        );
+
+        host.appendChild(fragment);
+
+        cp(name + ":AFTER_INSERT");
+
+        log(
+            "[E] connected callbacks=" +
+            window.__v31ConnectedCount
+        );
+
+        host.remove();
+
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
-/* ---------------------------------------------------------
-   F - nested/re-entrant animation start
-   --------------------------------------------------------- */
+/* --------------------------------
+   F — Trusted Types prerequisite
+-------------------------------- */
 
 async function testF() {
 
-    const name = "F_NESTED_BEGIN";
+    const name =
+        "F_TRUSTED_TYPES";
 
-    checkpoint(name, "CREATE");
-
-    let svg, r1, r2, a1, a2;
+    cp(name + ":START");
 
     try {
 
-        svg = svgElement("svg");
+        if (
+            typeof window.trustedTypes
+            === "undefined"
+        ) {
 
-        r1 = svgElement("rect");
-        r2 = svgElement("rect");
+            log(
+                "[F] Trusted Types unavailable"
+            );
 
-        r1.setAttribute("width", "10");
-        r2.setAttribute("width", "10");
+            log(
+                "[F] upstream 312244 path " +
+                "cannot be assumed reachable"
+            );
 
-        a1 = svgElement("animate");
-        a2 = svgElement("animate");
+            cp(
+                name +
+                ":UNAVAILABLE"
+            );
 
-        for (const a of [a1, a2]) {
-
-            a.setAttribute("attributeName", "width");
-            a.setAttribute("from", "10");
-            a.setAttribute("to", "50");
-            a.setAttribute("dur", "0.05s");
-            a.setAttribute("begin", "indefinite");
+            good(name);
+            return;
         }
 
-        r1.appendChild(a1);
-        r2.appendChild(a2);
+        log(
+            "[F] Trusted Types PRESENT"
+        );
 
-        svg.appendChild(r1);
-        svg.appendChild(r2);
+        log(
+            "[F] createPolicy=" +
+            typeof trustedTypes.createPolicy
+        );
 
-        document.body.appendChild(svg);
+        if (
+            typeof trustedTypes.createPolicy
+            === "function"
+        ) {
 
-        let nested = false;
+            const policy =
+                trustedTypes.createPolicy(
+                    "v31-" + Date.now(),
+                    {
+                        createHTML(input) {
+                            cp(
+                                name +
+                                ":CREATE_HTML_CALLBACK"
+                            );
 
-        a1.addEventListener("beginEvent", function () {
+                            return input;
+                        }
+                    }
+                );
 
-            checkpoint(name, "A1_ENTER");
+            const trusted =
+                policy.createHTML(
+                    "<i>trusted-v31</i>"
+                );
 
-            if (!nested) {
+            log(
+                "[F] trusted object=" +
+                String(trusted)
+            );
 
-                nested = true;
+            const host =
+                document.createElement("div");
 
-                checkpoint(name, "START_A2");
+            document.body.appendChild(host);
 
-                a2.beginElement();
-            }
+            const range =
+                document.createRange();
 
-            r1.remove();
+            range.selectNodeContents(host);
 
-            checkpoint(name, "R1_REMOVED");
+            cp(
+                name +
+                ":BEFORE_CONTEXTUAL_FRAGMENT"
+            );
 
-            forceLayout(svg);
+            const fragment =
+                range.createContextualFragment(
+                    trusted
+                );
 
-            checkpoint(name, "A1_EXIT");
-        });
+            cp(
+                name +
+                ":AFTER_CONTEXTUAL_FRAGMENT"
+            );
 
-        a2.addEventListener("beginEvent", function () {
+            log(
+                "[F] fragment text=" +
+                fragment.textContent
+            );
 
-            checkpoint(name, "A2_ENTER");
+            host.remove();
+        }
 
-            void r1.ownerDocument;
-            void r2.ownerDocument;
-
-            forceLayout(svg);
-
-            checkpoint(name, "A2_EXIT");
-        });
-
-        a1.beginElement();
-
-        await delay(150);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
+        cp(name + ":COMPLETE");
+        good(name);
 
     } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+        caught(name, e);
     }
 }
 
 
 async function run() {
 
-    document.querySelector("#run").disabled = true;
+    button.disabled = true;
+
+    out.textContent = "";
 
     pass = 0;
     exceptions = 0;
     anomalies = 0;
 
-    logBox.textContent = "";
+    statusBox.textContent =
+        "STATUS: RUNNING";
 
-    const old = localStorage.getItem("PS5_V26_CHECKPOINT");
+    const old =
+        localStorage.getItem(
+            "PS5_V31_CP"
+        );
 
-    if (old)
-        log("Previous checkpoint: " + old);
+    if (old) {
+        log(
+            "Previous checkpoint: " +
+            old
+        );
+    }
 
-    log("User agent:");
+    log("PS5 13.60 — V31");
+    log(
+        "Range.createContextualFragment probe"
+    );
+    log("");
+
     log(navigator.userAgent);
-    log("");
-
-    log("SVGElement: " + typeof SVGElement);
-    log("SVGPathElement: " + typeof SVGPathElement);
-    log("SVGAnimationElement: " + typeof SVGAnimationElement);
-
-    log("");
-    log("Starting V26...");
     log("");
 
     await testA();
@@ -600,23 +658,37 @@ async function run() {
     await testE();
     await testF();
 
-    checkpoint("V26", "COMPLETE");
-
-    statusBox.textContent =
-        anomalies || exceptions ?
-        "STATUS: ANOMALY" :
-        "STATUS: NORMAL";
+    cp("V31:COMPLETE");
 
     log("");
-    log("==============================");
-    log("TESTS COMPLETED: 6");
+    log("============================");
+    log("V31 RESULT");
+    log("============================");
+    log("TESTS: 6");
     log("PASS: " + pass);
-    log("EXCEPTIONS: " + exceptions);
-    log("ANOMALIES: " + anomalies);
-    log("==============================");
+    log(
+        "EXCEPTIONS: " +
+        exceptions
+    );
+    log(
+        "ANOMALIES: " +
+        anomalies
+    );
+    log("============================");
 
-    document.querySelector("#run").disabled = false;
+    if (
+        exceptions === 0 &&
+        anomalies === 0
+    ) {
+        statusBox.textContent =
+            "STATUS: NORMAL";
+    } else {
+        statusBox.textContent =
+            "STATUS: CHECK RESULT";
+    }
+
+    button.disabled = false;
 }
 
-document.querySelector("#run").onclick = run;
+button.onclick = run;
 </script>
