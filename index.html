@@ -1,23 +1,24 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V5</title>
+<title>PS5 WebKit 13.60 V6 Fuzzer</title>
 
 <style>
 body {
-    background:#101827;
-    color:#eee;
-    font:17px monospace;
-    padding:20px
+  background:#101827;
+  color:#eee;
+  font:17px monospace;
+  padding:20px;
 }
-button,select {
-    font:17px monospace;
-    padding:10px;
-    margin:4px
+button,input {
+  font:17px monospace;
+  padding:9px;
+  margin:4px;
 }
 #log {
-    background:#17233a;
-    padding:15px;
-    white-space:pre-wrap
+  background:#17233a;
+  padding:15px;
+  margin-top:12px;
+  white-space:pre-wrap;
 }
 .ok {color:#59ff7a}
 .bad {color:#ff6868}
@@ -25,25 +26,17 @@ button,select {
 .warn {color:#ffd166}
 </style>
 
-<h2>PS5 WebKit 13.60 — V5 Regression Runner</h2>
+<h2>PS5 WebKit 13.60 — V6 Seeded Fuzzer</h2>
 
-<select id="test">
-<option value="dom">DOM detach</option>
-<option value="iframe">Document teardown</option>
-<option value="event">Event mutation</option>
-<option value="array">ArrayBuffer lifecycle</option>
-<option value="all">Run all</option>
-</select>
+Seed:
+<input id="seed" value="1360605" size="12">
 
-<select id="runs">
-<option>10</option>
-<option selected>100</option>
-<option>500</option>
-<option>2000</option>
-</select>
+Iterations:
+<input id="runs" value="5000" size="7">
 
-<button onclick="start()">Run</button>
+<button onclick="start()">Start</button>
 <button onclick="stopRun()">Stop</button>
+<button onclick="replay()">Replay Last</button>
 <button onclick="clearLog()">Clear</button>
 
 <div id="log"></div>
@@ -51,481 +44,649 @@ button,select {
 <script>
 "use strict";
 
-const box =
-    document.getElementById("log");
+const box=document.getElementById("log");
 
 let stopped=false;
-
-let stats;
-
-function log(s,c="") {
-    const d=document.createElement("div");
-    d.textContent=s;
-    d.className=c;
-    box.appendChild(d);
-}
-
-function clearLog() {
-    box.innerHTML="";
-}
-
-function stopRun() {
-    stopped=true;
-    log("STOP requested","warn");
-}
-
-function saveCheckpoint(test,i,state) {
-
-    try {
-
-        localStorage.setItem(
-            "v5-last",
-            JSON.stringify({
-                test:test,
-                iteration:i,
-                state:state,
-                time:Date.now()
-            })
-        );
-
-    } catch(e) {}
-}
-
-function previousCrashCandidate() {
-
-    try {
-
-        const raw=
-            localStorage.getItem("v5-last");
-
-        if(!raw)
-            return;
-
-        const x=JSON.parse(raw);
-
-        /*
-         If the previous page disappeared while
-         state was RUNNING, that particular test
-         didn't reach its completion checkpoint.
-        */
-
-        if(x.state==="RUNNING") {
-
-            log(
-                "Previous incomplete testcase:",
-                "warn"
-            );
-
-            log(
-                x.test+
-                " iteration "+
-                x.iteration,
-                "warn"
-            );
-        }
-
-    } catch(e) {}
-}
-
-/* =====================================
-   CASE A — detached DOM wrapper
-===================================== */
-
-async function testDOM(i) {
-
-    const parent=
-        document.createElement("div");
-
-    const child=
-        document.createElement("span");
-
-    child.textContent="before";
-
-    parent.appendChild(child);
-    document.body.appendChild(parent);
-
-    child.remove();
-
-    child.textContent=
-        "after-"+i;
-
-    const result=
-        child.textContent===
-        "after-"+i;
-
-    parent.remove();
-
-    return result;
-}
-
-/* =====================================
-   CASE B — document teardown
-===================================== */
-
-async function testIframe(i) {
-
-    return new Promise(resolve=>{
-
-        const frame=
-            document.createElement("iframe");
-
-        let finished=false;
-
-        const timeout=setTimeout(()=>{
-
-            if(finished)
-                return;
-
-            finished=true;
-
-            try { frame.remove(); }
-            catch(e) {}
-
-            resolve(false);
-
-        },1000);
-
-        frame.onload=function(){
-
-            if(finished)
-                return;
-
-            try {
-
-                const doc=
-                    frame.contentDocument;
-
-                const node=
-                    doc.createElement("div");
-
-                node.textContent=
-                    "frame-"+i;
-
-                doc.body.appendChild(node);
-
-                frame.remove();
-
-                const result=
-                    node.textContent===
-                    "frame-"+i;
-
-                finished=true;
-                clearTimeout(timeout);
-
-                resolve(result);
-
-            } catch(e) {
-
-                finished=true;
-                clearTimeout(timeout);
-
-                resolve(false);
-            }
-        };
-
-        frame.src="about:blank";
-
-        document.body.appendChild(frame);
-    });
-}
-
-/* =====================================
-   CASE C — mutation during event
-===================================== */
-
-async function testEvent(i) {
-
-    const root=
-        document.createElement("div");
-
-    document.body.appendChild(root);
-
-    for(let n=0;n<100;n++) {
-
-        const x=
-            document.createElement("span");
-
-        x.textContent=String(n);
-
-        root.appendChild(x);
-    }
-
-    let fired=0;
-
-    function callback() {
-
-        fired++;
-
-        while(root.firstChild)
-            root.removeChild(root.firstChild);
-
-        const replacement=
-            document.createElement("div");
-
-        replacement.textContent=
-            "replacement-"+i;
-
-        root.appendChild(replacement);
-    }
-
-    root.addEventListener(
-        "v5-event",
-        callback
-    );
-
-    root.dispatchEvent(
-        new Event("v5-event")
-    );
-
-    root.removeEventListener(
-        "v5-event",
-        callback
-    );
-
-    const result=
-        fired===1 &&
-        root.childNodes.length===1;
-
-    root.remove();
-
-    return result;
-}
-
-/* =====================================
-   CASE D — ArrayBuffer lifecycle
-===================================== */
-
-async function testArray(i) {
-
-    const buffer=
-        new ArrayBuffer(0x10000);
-
-    const a=
-        new Uint32Array(buffer);
-
-    for(let n=0;n<a.length;n++) {
-
-        a[n]=(
-            0x41410000 ^
-            n ^
-            i
-        )>>>0;
-    }
-
-    for(let n=0;n<a.length;n++) {
-
-        const expected=(
-            0x41410000 ^
-            n ^
-            i
-        )>>>0;
-
-        if(a[n]!==expected)
-            return false;
-    }
-
-    return true;
-}
-
-const tests={
-    dom:testDOM,
-    iframe:testIframe,
-    event:testEvent,
-    array:testArray
+let lastSeed=0;
+
+let stats={
+  tests:0,
+  pass:0,
+  fail:0,
+  exceptions:0,
+  start:0
 };
 
-async function execute(name,i) {
+function log(s,c=""){
+  const d=document.createElement("div");
+  d.textContent=s;
+  d.className=c;
+  box.appendChild(d);
+  window.scrollTo(0,document.body.scrollHeight);
+}
 
-    saveCheckpoint(
-        name,
-        i,
-        "RUNNING"
+function clearLog(){
+  box.innerHTML="";
+}
+
+function stopRun(){
+  stopped=true;
+  log("STOP requested","warn");
+}
+
+/*
+ Seeded PRNG.
+
+ Same seed => same operation sequence.
+*/
+
+function RNG(seed){
+
+  let x=seed>>>0;
+
+  return function(){
+
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+
+    return (x>>>0)/4294967296;
+  };
+}
+
+function randInt(rng,max){
+  return Math.floor(rng()*max);
+}
+
+function checkpoint(seed,iteration,operation){
+
+  try{
+
+    localStorage.setItem(
+      "v6-checkpoint",
+      JSON.stringify({
+        seed,
+        iteration,
+        operation,
+        state:"RUNNING"
+      })
     );
 
-    const start=
-        performance.now();
+  }catch(e){}
+}
 
-    try {
+function complete(seed,iteration){
 
-        const result=
-            await tests[name](i);
+  try{
 
-        const elapsed=
-            performance.now()-start;
+    localStorage.setItem(
+      "v6-checkpoint",
+      JSON.stringify({
+        seed,
+        iteration,
+        state:"COMPLETE"
+      })
+    );
 
-        if(result!==true) {
+  }catch(e){}
+}
 
-            stats.fail++;
+function showPrevious(){
 
-            log(
-                "[FAIL] "+
-                name+
-                " #"+
-                i,
-                "bad"
-            );
+  try{
 
-            return;
-        }
+    const raw=
+      localStorage.getItem(
+        "v6-checkpoint"
+      );
 
-        /*
-         A very long execution isn't proof
-         of a security problem, but flag it
-         for reproduction.
-        */
+    if(!raw) return;
 
-        if(elapsed>500) {
+    const c=JSON.parse(raw);
 
-            stats.slow++;
+    if(c.state==="RUNNING"){
 
-            log(
-                "[SLOW] "+
-                name+
-                " #"+
-                i+
-                " "+
-                elapsed.toFixed(1)+
-                "ms",
-                "warn"
-            );
-        }
+      log(
+        "Previous incomplete run:",
+        "warn"
+      );
+
+      log(
+        "Seed: "+c.seed+
+        " Iteration: "+c.iteration+
+        " Operation: "+c.operation,
+        "warn"
+      );
+    }
+
+  }catch(e){}
+}
+
+/* =====================================
+   Operation 0 — DOM create/remove
+===================================== */
+
+function opDOM(rng,i){
+
+  const root=
+    document.createElement("div");
+
+  document.body.appendChild(root);
+
+  const count=
+    10+randInt(rng,100);
+
+  for(let n=0;n<count;n++){
+
+    const e=
+      document.createElement(
+        randInt(rng,2) ?
+        "span":"div"
+      );
+
+    e.textContent=
+      i+":"+n;
+
+    root.appendChild(e);
+  }
+
+  while(root.firstChild){
+
+    const index=
+      randInt(
+        rng,
+        root.childNodes.length
+      );
+
+    root.removeChild(
+      root.childNodes[index]
+    );
+  }
+
+  const ok=
+    root.childNodes.length===0;
+
+  root.remove();
+
+  return ok;
+}
+
+/* =====================================
+   Operation 1 — ArrayBuffer integrity
+===================================== */
+
+function opBuffer(rng,i){
+
+  const words=
+    64+randInt(rng,4096);
+
+  const buffer=
+    new ArrayBuffer(words*4);
+
+  const a=
+    new Uint32Array(buffer);
+
+  const marker=
+    randInt(rng,0xffffffff)>>>0;
+
+  for(let n=0;n<a.length;n++)
+    a[n]=(marker^n^i)>>>0;
+
+  for(let n=0;n<a.length;n++){
+
+    if(
+      a[n] !==
+      ((marker^n^i)>>>0)
+    )
+      return false;
+  }
+
+  return true;
+}
+
+/* =====================================
+   Operation 2 — Event mutation
+===================================== */
+
+function opEvent(rng,i){
+
+  const root=
+    document.createElement("div");
+
+  document.body.appendChild(root);
+
+  const count=
+    5+randInt(rng,60);
+
+  for(let n=0;n<count;n++){
+
+    const x=
+      document.createElement("span");
+
+    x.textContent=String(n);
+
+    root.appendChild(x);
+  }
+
+  let calls=0;
+
+  function handler(){
+
+    calls++;
+
+    while(root.firstChild)
+      root.removeChild(
+        root.firstChild
+      );
+
+    const replacement=
+      document.createElement("b");
+
+    replacement.textContent=
+      "iteration-"+i;
+
+    root.appendChild(
+      replacement
+    );
+  }
+
+  root.addEventListener(
+    "v6",
+    handler
+  );
+
+  root.dispatchEvent(
+    new Event("v6")
+  );
+
+  root.removeEventListener(
+    "v6",
+    handler
+  );
+
+  const ok=
+    calls===1 &&
+    root.childNodes.length===1;
+
+  root.remove();
+
+  return ok;
+}
+
+/* =====================================
+   Operation 3 — detached wrappers
+===================================== */
+
+function opDetached(rng,i){
+
+  const parent=
+    document.createElement("div");
+
+  const child=
+    document.createElement("div");
+
+  parent.appendChild(child);
+  document.body.appendChild(parent);
+
+  child.setAttribute(
+    "data-before",
+    String(i)
+  );
+
+  child.remove();
+
+  const value=
+    randInt(rng,0xffffff);
+
+  child.setAttribute(
+    "data-after",
+    String(value)
+  );
+
+  const ok=
+    child.getAttribute(
+      "data-after"
+    )===String(value);
+
+  parent.remove();
+
+  return ok;
+}
+
+/* =====================================
+   Operation 4 — DataView boundaries
+===================================== */
+
+function opDataView(rng){
+
+  const size=
+    32+randInt(rng,512);
+
+  const b=
+    new ArrayBuffer(size);
+
+  const d=
+    new DataView(b);
+
+  const offset=
+    randInt(rng,size-4);
+
+  const value=
+    randInt(rng,0xffffffff)>>>0;
+
+  d.setUint32(offset,value);
+
+  if(d.getUint32(offset)!==value)
+    return false;
+
+  let trapped=false;
+
+  try{
+
+    d.getUint32(size+8);
+
+  }catch(e){
+
+    trapped=true;
+  }
+
+  return trapped;
+}
+
+/* =====================================
+   Operation 5 — object churn
+===================================== */
+
+function opObjects(rng,i){
+
+  const count=
+    100+randInt(rng,1500);
+
+  let objects=[];
+
+  for(let n=0;n<count;n++){
+
+    objects.push({
+      n:n,
+      iteration:i,
+      value:randInt(
+        rng,
+        0xffffff
+      ),
+      text:"v6-"+n
+    });
+  }
+
+  for(
+    let n=0;
+    n<objects.length;
+    n+=37
+  ){
+
+    if(
+      objects[n].n!==n ||
+      objects[n].iteration!==i
+    )
+      return false;
+  }
+
+  objects=null;
+
+  return true;
+}
+
+const operations=[
+  opDOM,
+  opBuffer,
+  opEvent,
+  opDetached,
+  opDataView,
+  opObjects
+];
+
+const names=[
+  "DOM",
+  "ArrayBuffer",
+  "Event mutation",
+  "Detached DOM",
+  "DataView",
+  "Object churn"
+];
+
+async function runSeed(seed,runs){
+
+  stopped=false;
+
+  stats={
+    tests:0,
+    pass:0,
+    fail:0,
+    exceptions:0,
+    start:performance.now()
+  };
+
+  lastSeed=seed;
+
+  const rng=RNG(seed);
+
+  log(
+    "V6 starting",
+    "info"
+  );
+
+  log("Seed: "+seed);
+  log("Iterations: "+runs);
+  log("UA: "+navigator.userAgent);
+  log("");
+
+  for(let i=0;i<runs;i++){
+
+    if(stopped)
+      break;
+
+    /*
+     Choose operation deterministically
+     from the seeded generator.
+    */
+
+    const op=
+      randInt(
+        rng,
+        operations.length
+      );
+
+    checkpoint(
+      seed,
+      i,
+      names[op]
+    );
+
+    stats.tests++;
+
+    try{
+
+      const result=
+        operations[op](
+          rng,
+          i
+        );
+
+      if(result===true){
 
         stats.pass++;
 
-    } catch(e) {
+      }else{
 
-        stats.exception++;
+        stats.fail++;
 
         log(
-            "[EXCEPTION] "+
-            name+
-            " #"+
-            i+
-            " : "+
-            e,
-            "bad"
+          "[FAIL] seed="+seed+
+          " iteration="+i+
+          " operation="+names[op],
+          "bad"
         );
+      }
+
+    }catch(e){
+
+      stats.exceptions++;
+
+      log(
+        "[EXCEPTION] seed="+seed+
+        " iteration="+i+
+        " operation="+names[op]+
+        " :: "+e,
+        "bad"
+      );
     }
 
-    saveCheckpoint(
-        name,
-        i,
-        "COMPLETE"
-    );
+    complete(seed,i);
+
+    if((i%100)===0){
+
+      log(
+        "Iteration "+
+        i+
+        "/"+
+        runs,
+        "info"
+      );
+
+      await new Promise(
+        r=>setTimeout(r,0)
+      );
+    }
+  }
+
+  const elapsed=
+    performance.now()-
+    stats.start;
+
+  log("");
+  log(
+    "======= V6 RESULT =======",
+    "info"
+  );
+
+  log("Seed:       "+seed);
+
+  log(
+    "PASS:       "+stats.pass,
+    "ok"
+  );
+
+  log(
+    "FAIL:       "+stats.fail,
+    stats.fail ?
+      "bad":"ok"
+  );
+
+  log(
+    "EXCEPTIONS: "+
+    stats.exceptions,
+    stats.exceptions ?
+      "bad":"ok"
+  );
+
+  log(
+    "Runtime:    "+
+    elapsed.toFixed(2)+
+    " ms"
+  );
+
+  log(
+    "=========================",
+    "info"
+  );
 }
 
-async function start() {
+function start(){
 
-    clearLog();
+  clearLog();
+  showPrevious();
 
-    previousCrashCandidate();
+  const seed=
+    Number(
+      document.getElementById(
+        "seed"
+      ).value
+    )>>>0;
 
-    stopped=false;
-
-    stats={
-        pass:0,
-        fail:0,
-        exception:0,
-        slow:0
-    };
-
-    const selected=
-        document.getElementById("test").value;
-
-    const iterations=
-        Number(
-            document.getElementById("runs").value
-        );
-
-    const queue=
-        selected==="all"
-        ? Object.keys(tests)
-        : [selected];
-
-    log(
-        "V5 starting",
-        "info"
+  const runs=
+    Math.max(
+      1,
+      Number(
+        document.getElementById(
+          "runs"
+        ).value
+      )
     );
 
-    log(
-        navigator.userAgent
-    );
+  runSeed(seed,runs);
+}
 
-    log(
-        "Tests: "+
-        queue.join(", ")
-    );
+function replay(){
 
-    log(
-        "Iterations: "+
-        iterations
-    );
+  clearLog();
 
-    for(let i=0;i<iterations;i++) {
+  try{
 
-        if(stopped)
-            break;
+    const raw=
+      localStorage.getItem(
+        "v6-checkpoint"
+      );
 
-        for(const name of queue) {
+    if(!raw){
 
-            if(stopped)
-                break;
+      log(
+        "No previous run",
+        "warn"
+      );
 
-            await execute(name,i);
-        }
-
-        if(i%25===0) {
-
-            log(
-                "Iteration "+
-                i+
-                "/"+
-                iterations,
-                "info"
-            );
-
-            await new Promise(
-                r=>setTimeout(r,0)
-            );
-        }
+      return;
     }
 
-    log("");
-    log(
-        "======= V5 RESULT =======",
-        "info"
-    );
+    const c=
+      JSON.parse(raw);
+
+    document.getElementById(
+      "seed"
+    ).value=c.seed;
+
+    /*
+     Replay far enough to reach the
+     previous checkpoint.
+    */
+
+    const runs=
+      (c.iteration||0)+2;
+
+    document.getElementById(
+      "runs"
+    ).value=runs;
 
     log(
-        "PASS:       "+
-        stats.pass,
-        "ok"
+      "Replaying seed "+
+      c.seed+
+      " through iteration "+
+      c.iteration,
+      "warn"
     );
 
-    log(
-        "FAIL:       "+
-        stats.fail,
-        stats.fail ?
-        "bad":"ok"
+    runSeed(
+      c.seed,
+      runs
     );
 
-    log(
-        "EXCEPTIONS: "+
-        stats.exception,
-        stats.exception ?
-        "bad":"ok"
-    );
+  }catch(e){
 
     log(
-        "SLOW:       "+
-        stats.slow,
-        stats.slow ?
-        "warn":"ok"
+      "Replay error: "+e,
+      "bad"
     );
-
-    log(
-        "=========================",
-        "info"
-    );
+  }
 }
+
+showPrevious();
+
 </script>
