@@ -2,99 +2,139 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V19 SSV Crash/Repro Probe</title>
+<title>PS5 13.60 — V19.1 SSV Repro Probe</title>
+
 <style>
-body{
+body {
     background:#101827;
     color:#eee;
     font:16px monospace;
     padding:18px;
 }
-button,input{
+button,input {
     font:16px monospace;
     padding:9px;
     margin:4px;
 }
-#log{
+#log {
     background:#17233a;
     padding:14px;
     margin-top:12px;
     white-space:pre-wrap;
 }
-.ok{color:#59ff7a}
-.bad{color:#ff6868}
-.warn{color:#ffd166}
-.info{color:#63caff}
-#targetSpace{height:1400px}
+.ok   { color:#59ff7a; }
+.bad  { color:#ff6868; }
+.warn { color:#ffd166; }
+.info { color:#63caff; }
+
+#space {
+    height:1500px;
+}
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V19 SSV Crash/Repro Probe</h2>
+<h2>PS5 13.60 — V19.1 SSV Repro Probe</h2>
 
 Runs:
-<input id="runs" type="number" value="25" min="1" max="100">
+<input id="runs"
+       type="number"
+       value="25"
+       min="1"
+       max="50">
 
-<button onclick="startV19()">RUN V19</button>
-<button onclick="clearCheckpoint()">CLEAR CHECKPOINT</button>
+<button onclick="start()">RUN V19.1</button>
+<button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
 
-<div id="targetSpace"></div>
-<a id="v19target">V19 fragment target</a>
+<div id="space"></div>
+<a id="target">V19.1 fragment target</a>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V19_CHECKPOINT";
+const KEY = "PS5_V19_1_CP";
 
-const logBox =
+const box =
     document.getElementById("log");
 
-let totalBlur = 0;
-let totalReplace = 0;
-let anomalies = 0;
+let blurCount = 0;
+let replaceCount = 0;
+let anomalyCount = 0;
+let rateLimitCount = 0;
 
-function log(s, cls="") {
-    const d = document.createElement("div");
-    d.textContent = s;
+function log(text, cls="") {
+
+    const d =
+        document.createElement("div");
+
+    d.textContent = text;
     d.className = cls;
-    logBox.appendChild(d);
+
+    box.appendChild(d);
 }
 
-function saveCP(run, phase) {
+function delay(ms) {
+
+    return new Promise(
+        resolve => setTimeout(resolve, ms)
+    );
+}
+
+function save(run, phase, extra="") {
+
+    const data = {
+        status:"RUNNING",
+        run:run,
+        phase:phase,
+        extra:extra,
+        time:Date.now(),
+        href:location.href
+    };
+
     try {
         localStorage.setItem(
             KEY,
-            JSON.stringify({
-                status:"RUNNING",
-                run:run,
-                phase:phase,
-                time:Date.now(),
-                href:location.href
-            })
+            JSON.stringify(data)
         );
     } catch(e) {}
 }
 
-function markComplete(runs) {
+function finish(runs) {
+
     try {
+
         localStorage.setItem(
             KEY,
             JSON.stringify({
                 status:"COMPLETE",
                 runs:runs,
-                blur:totalBlur,
-                replace:totalReplace,
-                anomalies:anomalies
+                blur:blurCount,
+                replace:replaceCount,
+                anomalies:anomalyCount,
+                rateLimits:rateLimitCount
             })
         );
+
     } catch(e) {}
 }
 
-function showPrevious() {
+function clearCP() {
+
+    localStorage.removeItem(KEY);
+
+    log(
+        "Checkpoint cleared.",
+        "warn"
+    );
+}
+
+function previous() {
+
     try {
+
         const raw =
             localStorage.getItem(KEY);
 
@@ -104,54 +144,58 @@ function showPrevious() {
         const cp =
             JSON.parse(raw);
 
-        if (cp.status === "RUNNING") {
+        if (cp.status !== "RUNNING")
+            return;
+
+        log(
+            "*******************************",
+            "bad"
+        );
+
+        log(
+            "PREVIOUS RUN DID NOT COMPLETE",
+            "bad"
+        );
+
+        log(
+            "RUN: " + cp.run,
+            "bad"
+        );
+
+        log(
+            "LAST PHASE: " + cp.phase,
+            "bad"
+        );
+
+        if (cp.extra) {
             log(
-                "********************************",
-                "bad"
-            );
-            log(
-                "PREVIOUS V19 RUN DID NOT COMPLETE",
-                "bad"
-            );
-            log(
-                "LAST RUN: " + cp.run,
-                "bad"
-            );
-            log(
-                "LAST PHASE: " + cp.phase,
-                "bad"
-            );
-            log(
-                "********************************",
+                cp.extra,
                 "bad"
             );
         }
+
+        log(
+            "*******************************",
+            "bad"
+        );
+
     } catch(e) {}
 }
 
-function clearCheckpoint() {
-    localStorage.removeItem(KEY);
-    log("Checkpoint cleared.", "warn");
-}
+function waitPop(timeout=5000) {
 
-function delay(ms) {
-    return new Promise(
-        r => setTimeout(r,ms)
-    );
-}
-
-function waitForPop(timeout=3000) {
     return new Promise(
         (resolve,reject) => {
 
-            let done = false;
+            let finished = false;
 
             const timer =
                 setTimeout(() => {
-                    if (done)
+
+                    if (finished)
                         return;
 
-                    done = true;
+                    finished = true;
 
                     removeEventListener(
                         "popstate",
@@ -160,16 +204,19 @@ function waitForPop(timeout=3000) {
 
                     reject(
                         new Error(
-                            "popstate timeout"
+                            "POPSTATE_TIMEOUT"
                         )
                     );
+
                 },timeout);
 
             function handler(e) {
-                if (done)
+
+                if (finished)
                     return;
 
-                done = true;
+                finished = true;
+
                 clearTimeout(timer);
 
                 resolve(e);
@@ -183,224 +230,323 @@ function waitForPop(timeout=3000) {
     );
 }
 
+function isRateLimit(e) {
+
+    const s =
+        String(e);
+
+    return (
+        e &&
+        e.name === "SecurityError" &&
+        (
+            s.indexOf("100 times") !== -1 ||
+            s.indexOf("replaceState") !== -1
+        )
+    );
+}
+
 async function oneRun(n) {
 
-    saveCP(n,"START");
+    save(n,"RUN_START");
 
     /*
-     * Return to a known URL/state.
+     * Known starting entry.
      */
 
-    history.replaceState(
-        "v19-base-" + n,
-        "",
-        location.pathname
-    );
+    try {
 
-    saveCP(n,"CREATE_INPUT");
+        history.replaceState(
+            "v19-base-" + n,
+            "",
+            location.pathname
+        );
+
+    } catch(e) {
+
+        if (isRateLimit(e)) {
+
+            rateLimitCount++;
+
+            save(
+                n,
+                "HISTORY_RATE_LIMIT",
+                String(e)
+            );
+
+            throw new Error(
+                "RATE_LIMIT"
+            );
+        }
+
+        throw e;
+    }
+
+    /*
+     * Focus element.
+     */
 
     const input =
         document.createElement("input");
 
     input.value =
-        "V19 run " + n;
+        "V19.1 run " + n;
 
     document.body.insertBefore(
         input,
         document.body.firstChild
     );
 
-    /*
-     * Historical same-document arrangement.
-     */
-
-    saveCP(n,"PUSH_TARGET");
+    save(n,"PUSH_FRAGMENT");
 
     history.pushState(
-        "v19-state1-" + n,
+        "v19-original-" + n,
         "",
-        location.pathname + "#v19target"
+        location.pathname + "#target"
     );
 
-    saveCP(n,"PUSH_CURRENT");
+    save(n,"PUSH_CURRENT");
 
     history.pushState(
-        "v19-state2-" + n,
+        "v19-current-" + n,
         "",
         location.pathname
     );
 
-    let blurSeen = false;
-    let replaceSeen = false;
+    let sawBlur = false;
+    let sawReplace = false;
 
     input.onblur = function() {
 
-        blurSeen = true;
-        totalBlur++;
+        sawBlur = true;
+        blurCount++;
 
-        saveCP(
+        save(
             n,
             "BLUR_ENTER"
         );
 
-        /*
-         * This is the documented lifetime
-         * transition we're reproducing.
-         */
+        try {
 
-        saveCP(
+            save(
+                n,
+                "BEFORE_REPLACE"
+            );
+
+            history.replaceState(
+                "v19-replacement-" + n,
+                "",
+                location.href
+            );
+
+            sawReplace = true;
+            replaceCount++;
+
+            save(
+                n,
+                "AFTER_REPLACE"
+            );
+
+        } catch(e) {
+
+            if (isRateLimit(e)) {
+
+                rateLimitCount++;
+
+                save(
+                    n,
+                    "HISTORY_RATE_LIMIT_IN_BLUR",
+                    String(e)
+                );
+
+                return;
+            }
+
+            save(
+                n,
+                "BLUR_JS_EXCEPTION",
+                String(e)
+            );
+
+            throw e;
+        }
+
+        save(
             n,
-            "BEFORE_REPLACE"
-        );
-
-        history.replaceState(
-            "v19-replacement-" + n,
-            "",
-            location.href
-        );
-
-        replaceSeen = true;
-        totalReplace++;
-
-        saveCP(
-            n,
-            "AFTER_REPLACE"
+            "BLUR_EXIT"
         );
     };
 
-    saveCP(
+    save(
         n,
         "BEFORE_FOCUS"
     );
 
     input.focus();
 
-    await delay(20);
+    await delay(50);
 
     const pop =
-        waitForPop();
+        waitPop();
 
-    saveCP(
+    save(
         n,
-        "BEFORE_BACK"
+        "BEFORE_HISTORY_BACK"
     );
 
     history.back();
 
-    saveCP(
+    save(
         n,
-        "BACK_RETURNED"
+        "HISTORY_BACK_RETURNED"
     );
 
-    const ev =
+    const event =
         await pop;
 
-    saveCP(
+    save(
         n,
-        "POPSTATE"
+        "POPSTATE_RECEIVED"
     );
 
-    await delay(20);
+    await delay(100);
 
     /*
-     * Browser-visible consistency checks.
+     * Observable integrity checks.
      */
 
-    if (!blurSeen) {
-        anomalies++;
+    if (!sawBlur) {
+
+        anomalyCount++;
+
         log(
             "Run " + n +
-            ": blur missing",
+            ": BLUR MISSING",
             "bad"
         );
     }
 
-    if (!replaceSeen) {
-        anomalies++;
+    if (!sawReplace) {
+
+        anomalyCount++;
+
         log(
             "Run " + n +
-            ": replacement missing",
+            ": REPLACE MISSING",
             "bad"
         );
     }
 
-    const expected =
-        "v19-replacement-" + n;
+    if (
+        sawReplace &&
+        history.state !==
+            "v19-replacement-" + n
+    ) {
 
-    if (history.state !== expected) {
-        anomalies++;
+        anomalyCount++;
 
         log(
             "Run " + n +
-            ": state mismatch: " +
-            String(history.state),
+            ": HISTORY STATE MISMATCH",
             "bad"
         );
     }
 
-    /*
-     * Observe event state as well.
-     * Don't manipulate its backing storage.
-     */
+    if (event.state == null) {
 
-    if (ev.state == null) {
-        anomalies++;
+        anomalyCount++;
 
         log(
             "Run " + n +
-            ": null popstate state",
+            ": POPSTATE STATE NULL",
             "bad"
         );
     }
 
-    saveCP(
+    save(
         n,
         "CLEANUP"
     );
 
     input.onblur = null;
+
     input.remove();
 
-    history.replaceState(
-        null,
-        "",
-        location.pathname
-    );
+    try {
 
-    saveCP(
+        history.replaceState(
+            null,
+            "",
+            location.pathname
+        );
+
+    } catch(e) {
+
+        if (isRateLimit(e)) {
+
+            rateLimitCount++;
+
+            save(
+                n,
+                "HISTORY_RATE_LIMIT_CLEANUP",
+                String(e)
+            );
+
+        } else {
+
+            throw e;
+        }
+    }
+
+    save(
         n,
-        "COMPLETE"
+        "RUN_COMPLETE"
     );
 }
 
-async function startV19() {
+async function start() {
 
-    logBox.innerHTML = "";
+    box.innerHTML = "";
 
-    showPrevious();
+    previous();
 
-    totalBlur = 0;
-    totalReplace = 0;
-    anomalies = 0;
+    blurCount = 0;
+    replaceCount = 0;
+    anomalyCount = 0;
+    rateLimitCount = 0;
 
     let runs =
         Number(
             document.getElementById("runs").value
         );
 
-    if (!Number.isFinite(runs))
-        runs = 25;
-
     runs =
         Math.max(
             1,
-            Math.min(100,runs)
+            Math.min(
+                50,
+                Number.isFinite(runs)
+                    ? runs
+                    : 25
+            )
         );
 
-    log("V19 START", "info");
-    log(navigator.userAgent);
-    log("");
-    log("Runs requested: " + runs);
+    log(
+        "V19.1 START",
+        "info"
+    );
+
+    log(
+        navigator.userAgent
+    );
+
+    log(
+        "Runs requested: " + runs
+    );
+
+    log(
+        "Inter-run delay: 750 ms"
+    );
+
     log("");
 
     try {
@@ -418,32 +564,65 @@ async function startV19() {
                 runs
             );
 
-            await oneRun(n);
+            try {
+
+                await oneRun(n);
+
+            } catch(e) {
+
+                if (
+                    String(e).indexOf(
+                        "RATE_LIMIT"
+                    ) !== -1
+                ) {
+
+                    log(
+                        "RATE LIMIT encountered",
+                        "warn"
+                    );
+
+                    /*
+                     * Wait for the History API
+                     * rate window to clear.
+                     */
+
+                    await delay(11000);
+
+                    continue;
+                }
+
+                save(
+                    n,
+                    "JS_EXCEPTION",
+                    String(e)
+                );
+
+                throw e;
+            }
 
             /*
-             * Give the event loop time to
-             * settle between reproductions.
+             * Deliberately slower than V19.
              */
 
-            await delay(50);
+            await delay(750);
         }
 
-        markComplete(runs);
+        finish(runs);
 
         log("");
         log(
-            "======= V19 RESULT =======",
+            "======= V19.1 RESULT =======",
             "info"
         );
 
         log(
             "STATUS: " +
             (
-                anomalies === 0
-                ? "NORMAL"
-                : "ANOMALY"
+                anomalyCount === 0
+                    ? "NORMAL"
+                    : "ANOMALY"
             ),
-            anomalies === 0
+            anomalyCount === 0
                 ? "ok"
                 : "bad"
         );
@@ -454,21 +633,26 @@ async function startV19() {
 
         log(
             "BLUR CALLBACKS: " +
-            totalBlur
+            blurCount
         );
 
         log(
             "REPLACE CALLBACKS: " +
-            totalReplace
+            replaceCount
         );
 
         log(
             "ANOMALIES: " +
-            anomalies
+            anomalyCount
         );
 
         log(
-            "==========================",
+            "RATE LIMITS: " +
+            rateLimitCount
+        );
+
+        log(
+            "============================",
             "info"
         );
 
@@ -476,7 +660,7 @@ async function startV19() {
 
         log("");
         log(
-            "V19 STOPPED",
+            "V19.1 STOPPED",
             "bad"
         );
 
@@ -487,7 +671,7 @@ async function startV19() {
     }
 }
 
-showPrevious();
+previous();
 
 </script>
 </body>
