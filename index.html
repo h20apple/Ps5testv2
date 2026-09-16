@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V23 Subframe History Probe</title>
+<title>PS5 13.60 — V24 Capability Fingerprint</title>
 
 <style>
 body {
@@ -14,6 +14,7 @@ body {
 button {
     font:16px monospace;
     padding:10px;
+    margin-right:8px;
 }
 #log {
     background:#17233a;
@@ -21,8 +22,8 @@ button {
     margin-top:12px;
     white-space:pre-wrap;
 }
-.ok { color:#59ff7a; }
-.bad { color:#ff6868; }
+.yes  { color:#59ff7a; }
+.no   { color:#ff6868; }
 .info { color:#63caff; }
 .warn { color:#ffd166; }
 </style>
@@ -30,715 +31,582 @@ button {
 
 <body>
 
-<h2>PS5 13.60 — V23 Subframe History Probe</h2>
+<h2>PS5 13.60 — V24 Capability Fingerprint</h2>
 
-<button onclick="runV23()">RUN V23</button>
+<button onclick="runV24()">RUN V24</button>
 
 <div id="log"></div>
-<div id="host"></div>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V23_CP";
+const out = document.getElementById("log");
 
-const logBox =
-    document.getElementById("log");
+let yes = 0;
+let no = 0;
+let errors = 0;
 
-const host =
-    document.getElementById("host");
-
-let seq = 0;
-let pass = 0;
-let anomalies = 0;
-let exceptions = 0;
-
-function log(s,c="") {
+function log(text, cls="") {
     const d = document.createElement("div");
-    d.textContent = s;
-    d.className = c;
-    logBox.appendChild(d);
+    d.textContent = text;
+    d.className = cls;
+    out.appendChild(d);
 }
 
-function cp(test,phase,detail="") {
-
-    seq++;
-
-    try {
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"RUNNING",
-                test:test,
-                phase:phase,
-                detail:detail,
-                seq:seq,
-                time:Date.now()
-            })
-        );
-    } catch(e) {}
-
-    log(
-        seq + ": [" + test + "] " +
-        phase +
-        (detail ? " — " + detail : ""),
-        "info"
-    );
-}
-
-function previous() {
-
-    try {
-
-        const raw =
-            localStorage.getItem(KEY);
-
-        if (!raw)
-            return;
-
-        const x =
-            JSON.parse(raw);
-
-        if (x.status !== "RUNNING")
-            return;
-
-        log(
-            "*****************************",
-            "bad"
-        );
-
-        log(
-            "PREVIOUS V23 DID NOT COMPLETE",
-            "bad"
-        );
-
-        log(
-            "TEST: " + x.test,
-            "bad"
-        );
-
-        log(
-            "LAST PHASE: " + x.phase,
-            "bad"
-        );
-
-        if (x.detail)
-            log(
-                "DETAIL: " + x.detail,
-                "bad"
-            );
-
-        log(
-            "*****************************",
-            "bad"
-        );
-
-    } catch(e) {}
-}
-
-function finish() {
-
-    try {
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"COMPLETE",
-                time:Date.now()
-            })
-        );
-    } catch(e) {}
-}
-
-function delay(ms) {
-    return new Promise(
-        resolve => setTimeout(resolve,ms)
-    );
-}
-
-function makeFrame() {
-
-    const frame =
-        document.createElement("iframe");
-
-    /*
-     * Same-origin about:blank frame so the
-     * parent can observe its document/window.
-     */
-
-    host.appendChild(frame);
-
-    const doc =
-        frame.contentDocument;
-
-    doc.open();
-
-    doc.write(
-        "<!doctype html>" +
-        "<html>" +
-        "<body>" +
-
-        "<div id='top'>TOP</div>" +
-
-        "<div style='height:600px'></div>" +
-
-        "<div id='foo'>FOO</div>" +
-
-        "<div style='height:600px'></div>" +
-
-        "<div id='bar'>BAR</div>" +
-
-        "</body>" +
-        "</html>"
-    );
-
-    doc.close();
-
-    return frame;
-}
-
-
-/*
- * TEST A
- *
- * Basic fragment navigation inside
- * the child frame.
- */
-
-async function testA() {
-
-    const name =
-        "A_HASH_NAVIGATION";
-
-    cp(name,"CREATE_FRAME");
-
-    const frame =
-        makeFrame();
-
-    const win =
-        frame.contentWindow;
-
-    const doc =
-        frame.contentDocument;
-
-    cp(name,"SET_FOO");
-
-    win.location.hash =
-        "#foo";
-
-    await delay(100);
-
-    cp(
-        name,
-        "AFTER_FOO",
-        win.location.hash
-    );
-
-    if (
-        win.location.hash !== "#foo"
-    ) {
-        anomalies++;
-        log(
-            "Expected #foo",
-            "bad"
-        );
-    }
-
-    cp(name,"SET_BAR");
-
-    win.location.hash =
-        "#bar";
-
-    await delay(100);
-
-    cp(
-        name,
-        "AFTER_BAR",
-        win.location.hash
-    );
-
-    if (
-        win.location.hash !== "#bar"
-    ) {
-        anomalies++;
-        log(
-            "Expected #bar",
-            "bad"
-        );
-    }
-
-    void doc.body.offsetHeight;
-
-    frame.remove();
-
-    cp(name,"COMPLETE");
-
-    pass++;
-}
-
-
-/*
- * TEST B
- *
- * Navigate child history backwards
- * while retaining child references.
- */
-
-async function testB() {
-
-    const name =
-        "B_CHILD_BACK";
-
-    cp(name,"CREATE_FRAME");
-
-    const frame =
-        makeFrame();
-
-    const win =
-        frame.contentWindow;
-
-    const doc =
-        frame.contentDocument;
-
-    win.location.hash =
-        "#foo";
-
-    await delay(100);
-
-    win.location.hash =
-        "#bar";
-
-    await delay(100);
-
-    cp(
-        name,
-        "BEFORE_BACK",
-        win.location.hash
-    );
-
-    win.history.back();
-
-    cp(
-        name,
-        "BACK_RETURNED"
-    );
-
-    await delay(300);
-
-    cp(
-        name,
-        "AFTER_BACK",
-        win.location.hash
-    );
-
-    /*
-     * Observe retained references.
-     */
-
-    void doc.readyState;
-    void doc.body.offsetHeight;
-
-    frame.remove();
-
-    cp(name,"COMPLETE");
-
-    pass++;
-}
-
-
-/*
- * TEST C
- *
- * Remove the iframe from its own
- * hashchange callback.
- */
-
-async function testC() {
-
-    const name =
-        "C_REMOVE_IN_HASHCHANGE";
-
-    cp(name,"CREATE_FRAME");
-
-    const frame =
-        makeFrame();
-
-    const win =
-        frame.contentWindow;
-
-    const doc =
-        frame.contentDocument;
-
-    let callback = 0;
-
-    win.addEventListener(
-        "hashchange",
-        function handler() {
-
-            callback++;
-
-            cp(
-                name,
-                "HASHCHANGE_ENTER",
-                win.location.hash
-            );
-
-            win.removeEventListener(
-                "hashchange",
-                handler
-            );
-
-            cp(
-                name,
-                "REMOVE_FRAME"
-            );
-
-            frame.remove();
-
-            cp(
-                name,
-                "READ_RETAINED_DOCUMENT"
-            );
-
-            /*
-             * Browser-visible observation only.
-             */
-
-            void doc.readyState;
-            void doc.body;
-
-            cp(
-                name,
-                "HASHCHANGE_EXIT"
-            );
-        }
-    );
-
-    cp(name,"SET_HASH");
-
-    win.location.hash =
-        "#foo";
-
-    cp(
-        name,
-        "HASH_SET_RETURNED"
-    );
-
-    await delay(300);
-
-    if (callback !== 1) {
-
-        anomalies++;
-
-        log(
-            "Unexpected hashchange count: " +
-            callback,
-            "bad"
-        );
-    }
-
-    cp(name,"COMPLETE");
-
-    pass++;
-}
-
-
-/*
- * TEST D
- *
- * Remove and reattach around fragment
- * history while keeping old references.
- */
-
-async function testD() {
-
-    const name =
-        "D_REMOVE_REATTACH_HISTORY";
-
-    cp(name,"CREATE_FRAME");
-
-    const frame =
-        makeFrame();
-
-    const oldWin =
-        frame.contentWindow;
-
-    const oldDoc =
-        frame.contentDocument;
-
-    oldWin.location.hash =
-        "#foo";
-
-    await delay(100);
-
-    cp(name,"REMOVE");
-
-    frame.remove();
-
-    await Promise.resolve();
-
-    cp(name,"READ_WHILE_DETACHED");
-
-    try {
-        void oldWin.closed;
-        void oldDoc.readyState;
-        void oldDoc.body;
-    } catch(e) {
-
-        exceptions++;
-
-        log(
-            "Detached read: " +
-            e.name + ": " +
-            e.message,
-            "warn"
-        );
-    }
-
-    cp(name,"REATTACH");
-
-    host.appendChild(frame);
-
-    await delay(200);
-
-    cp(name,"READ_AFTER_REATTACH");
-
-    try {
-
-        void oldWin.closed;
-        void oldDoc.readyState;
-
-        const current =
-            frame.contentWindow;
-
-        void current.location.href;
-
-    } catch(e) {
-
-        exceptions++;
-
-        log(
-            "Reattach read: " +
-            e.name + ": " +
-            e.message,
-            "warn"
-        );
-    }
-
-    frame.remove();
-
-    cp(name,"COMPLETE");
-
-    pass++;
-}
-
-
-/*
- * TEST E
- *
- * Replace the child document after
- * fragment navigation while retaining
- * the original document.
- */
-
-async function testE() {
-
-    const name =
-        "E_NAV_REPLACE_DOCUMENT";
-
-    cp(name,"CREATE_FRAME");
-
-    const frame =
-        makeFrame();
-
-    const win =
-        frame.contentWindow;
-
-    const oldDoc =
-        frame.contentDocument;
-
-    const oldFoo =
-        oldDoc.getElementById("foo");
-
-    cp(name,"NAVIGATE");
-
-    win.location.hash =
-        "#foo";
-
-    await delay(100);
-
-    cp(name,"OPEN_DOCUMENT");
-
-    win.document.open();
-
-    cp(name,"WRITE_DOCUMENT");
-
-    win.document.write(
-        "<!doctype html>" +
-        "<html><body>" +
-        "<div id='replacement'>" +
-        "REPLACEMENT_OK" +
-        "</div>" +
-        "</body></html>"
-    );
-
-    cp(name,"CLOSE_DOCUMENT");
-
-    win.document.close();
-
-    cp(name,"READ_OLD_REFERENCES");
-
-    try {
-        void oldDoc.readyState;
-        void oldFoo.textContent;
-        void oldFoo.ownerDocument;
-    } catch(e) {
-
-        exceptions++;
-
-        log(
-            "Old reference exception: " +
-            e.name + ": " +
-            e.message,
-            "warn"
-        );
-    }
-
-    cp(name,"CHECK_NEW_DOCUMENT");
-
-    const replacement =
-        frame.contentDocument
-             .getElementById(
-                 "replacement"
-             );
-
-    if (
-        !replacement ||
-        replacement.textContent !==
-        "REPLACEMENT_OK"
-    ) {
-
-        anomalies++;
-
-        log(
-            "Replacement document mismatch",
-            "bad"
-        );
-    }
-
-    frame.remove();
-
-    cp(name,"COMPLETE");
-
-    pass++;
-}
-
-
-async function runV23() {
-
-    logBox.innerHTML = "";
-    host.innerHTML = "";
-
-    previous();
-
-    seq = 0;
-    pass = 0;
-    anomalies = 0;
-    exceptions = 0;
-
-    log(
-        "V23 START",
-        "info"
-    );
-
-    log(navigator.userAgent);
+function section(name) {
     log("");
+    log("===== " + name + " =====", "info");
+}
+
+function result(name, supported, detail="") {
+
+    if (supported) yes++;
+    else no++;
+
+    log(
+        (supported ? "[YES] " : "[NO ] ") +
+        name +
+        (detail ? " — " + detail : ""),
+        supported ? "yes" : "no"
+    );
+}
+
+function exists(name, value) {
+    result(name, typeof value !== "undefined",
+        typeof value);
+}
+
+function css(name, property, value) {
+
+    let supported = false;
+
+    try {
+        supported =
+            !!window.CSS &&
+            typeof CSS.supports === "function" &&
+            CSS.supports(property, value);
+    } catch(e) {
+        errors++;
+    }
+
+    result(
+        name,
+        supported,
+        property + ": " + value
+    );
+}
+
+async function runV24() {
+
+    out.innerHTML = "";
+
+    yes = 0;
+    no = 0;
+    errors = 0;
+
+    log("V24 START", "info");
+    log(navigator.userAgent);
+
+    /*
+     * JavaScript / memory
+     */
+
+    section("JAVASCRIPT / MEMORY");
+
+    exists("ArrayBuffer", window.ArrayBuffer);
+    exists("SharedArrayBuffer", window.SharedArrayBuffer);
+    exists("DataView", window.DataView);
+    exists("Uint8Array", window.Uint8Array);
+    exists("BigInt", window.BigInt);
+    exists("BigInt64Array", window.BigInt64Array);
+    exists("WebAssembly", window.WebAssembly);
+    exists("Atomics", window.Atomics);
+    exists("Proxy", window.Proxy);
+    exists("WeakRef", window.WeakRef);
+    exists("FinalizationRegistry", window.FinalizationRegistry);
+    exists("structuredClone", window.structuredClone);
+
+    /*
+     * Workers / async
+     */
+
+    section("WORKERS / ASYNC");
+
+    exists("Worker", window.Worker);
+    exists("SharedWorker", window.SharedWorker);
+    exists("MessageChannel", window.MessageChannel);
+    exists("BroadcastChannel", window.BroadcastChannel);
+    exists("queueMicrotask", window.queueMicrotask);
+    exists("requestIdleCallback", window.requestIdleCallback);
+
+    /*
+     * Storage
+     */
+
+    section("STORAGE");
+
+    exists("localStorage", window.localStorage);
+    exists("sessionStorage", window.sessionStorage);
+    exists("indexedDB", window.indexedDB);
+    exists("caches", window.caches);
+
+    /*
+     * DOM
+     */
+
+    section("DOM");
+
+    exists("MutationObserver", window.MutationObserver);
+    exists("IntersectionObserver", window.IntersectionObserver);
+    exists("ResizeObserver", window.ResizeObserver);
+    exists("DOMParser", window.DOMParser);
+    exists("XMLSerializer", window.XMLSerializer);
+    exists("Range", window.Range);
+    exists("Selection", window.Selection);
+    exists("NodeIterator", window.NodeIterator);
+    exists("TreeWalker", window.TreeWalker);
+    exists("ShadowRoot", window.ShadowRoot);
+    exists("customElements", window.customElements);
+
+    let attachShadow = false;
+
+    try {
+        attachShadow =
+            typeof document.createElement("div")
+                .attachShadow === "function";
+    } catch(e) {
+        errors++;
+    }
+
+    result("Element.attachShadow", attachShadow);
+
+    /*
+     * Events
+     */
+
+    section("EVENTS");
+
+    exists("Event", window.Event);
+    exists("CustomEvent", window.CustomEvent);
+    exists("FocusEvent", window.FocusEvent);
+    exists("MouseEvent", window.MouseEvent);
+    exists("PointerEvent", window.PointerEvent);
+    exists("TouchEvent", window.TouchEvent);
+    exists("InputEvent", window.InputEvent);
+    exists("KeyboardEvent", window.KeyboardEvent);
+
+    /*
+     * Fonts
+     */
+
+    section("FONTS");
+
+    exists("FontFace", window.FontFace);
+
+    result(
+        "document.fonts",
+        typeof document.fonts !== "undefined"
+    );
+
+    if (document.fonts) {
+
+        result(
+            "FontFaceSet.add",
+            typeof document.fonts.add === "function"
+        );
+
+        result(
+            "FontFaceSet.delete",
+            typeof document.fonts.delete === "function"
+        );
+
+        result(
+            "FontFaceSet.check",
+            typeof document.fonts.check === "function"
+        );
+
+        result(
+            "FontFaceSet.ready",
+            typeof document.fonts.ready !== "undefined"
+        );
+    }
+
+    /*
+     * Graphics
+     */
+
+    section("GRAPHICS");
+
+    exists("CanvasRenderingContext2D",
+        window.CanvasRenderingContext2D);
+
+    exists("WebGLRenderingContext",
+        window.WebGLRenderingContext);
+
+    exists("WebGL2RenderingContext",
+        window.WebGL2RenderingContext);
+
+    exists("ImageBitmap",
+        window.ImageBitmap);
+
+    exists("OffscreenCanvas",
+        window.OffscreenCanvas);
+
+    /*
+     * SVG
+     */
+
+    section("SVG");
+
+    exists("SVGElement", window.SVGElement);
+    exists("SVGSVGElement", window.SVGSVGElement);
+    exists("SVGPathElement", window.SVGPathElement);
+    exists("SVGAnimationElement", window.SVGAnimationElement);
+
+    /*
+     * Networking
+     */
+
+    section("NETWORK");
+
+    exists("fetch", window.fetch);
+    exists("XMLHttpRequest", window.XMLHttpRequest);
+    exists("WebSocket", window.WebSocket);
+    exists("EventSource", window.EventSource);
+    exists("URL", window.URL);
+    exists("URLSearchParams", window.URLSearchParams);
+
+    /*
+     * Crypto
+     */
+
+    section("CRYPTO");
+
+    result(
+        "crypto",
+        typeof window.crypto !== "undefined"
+    );
+
+    result(
+        "crypto.subtle",
+        !!(
+            window.crypto &&
+            window.crypto.subtle
+        )
+    );
+
+    /*
+     * Media
+     */
+
+    section("MEDIA");
+
+    exists("AudioContext", window.AudioContext);
+    exists("webkitAudioContext", window.webkitAudioContext);
+    exists("MediaSource", window.MediaSource);
+    exists("MediaRecorder", window.MediaRecorder);
+    exists("RTCPeerConnection", window.RTCPeerConnection);
+
+    /*
+     * History / navigation
+     */
+
+    section("HISTORY");
+
+    result(
+        "history.pushState",
+        typeof history.pushState === "function"
+    );
+
+    result(
+        "history.replaceState",
+        typeof history.replaceState === "function"
+    );
+
+    result(
+        "history.back",
+        typeof history.back === "function"
+    );
+
+    /*
+     * CSS
+     */
+
+    section("CSS");
+
+    result(
+        "CSS.supports",
+        !!window.CSS &&
+        typeof CSS.supports === "function"
+    );
+
+    css("Flexbox",
+        "display",
+        "flex");
+
+    css("Grid",
+        "display",
+        "grid");
+
+    css("CSS variables",
+        "--v24",
+        "1");
+
+    css("Filter",
+        "filter",
+        "blur(1px)");
+
+    css("Backdrop filter",
+        "backdrop-filter",
+        "blur(1px)");
+
+    css("Clip path",
+        "clip-path",
+        "circle(20px)");
+
+    css("Contain",
+        "contain",
+        "layout");
+
+    css("Content visibility",
+        "content-visibility",
+        "hidden");
+
+    css("Aspect ratio",
+        "aspect-ratio",
+        "1 / 1");
+
+    css("Object fit",
+        "object-fit",
+        "cover");
+
+    css("Writing mode",
+        "writing-mode",
+        "vertical-rl");
+
+    css("CSS animation",
+        "animation-name",
+        "v24");
+
+    css("CSS transform",
+        "transform",
+        "translateX(1px)");
+
+    css("CSS perspective",
+        "perspective",
+        "100px");
+
+    css("CSS mask",
+        "-webkit-mask-image",
+        "linear-gradient(black,transparent)");
+
+    css("CSS columns",
+        "column-count",
+        "2");
+
+    css("Position sticky",
+        "position",
+        "sticky");
+
+    css("Position fixed",
+        "position",
+        "fixed");
+
+    /*
+     * Newer CSS features.
+     */
+
+    css("Anchor positioning",
+        "anchor-name",
+        "--v24-anchor");
+
+    css("Container queries",
+        "container-type",
+        "inline-size");
+
+    /*
+     * Selector support.
+     */
+
+    section("SELECTORS");
+
+    function selectorTest(name, selector) {
+
+        let ok = false;
+
+        try {
+
+            if (
+                window.CSS &&
+                typeof CSS.supports === "function"
+            ) {
+                ok =
+                    CSS.supports(
+                        "selector(" +
+                        selector +
+                        ")"
+                    );
+            }
+
+        } catch(e) {
+            errors++;
+        }
+
+        result(name, ok, selector);
+    }
+
+    selectorTest(":has()", ":has(div)");
+    selectorTest(":is()", ":is(div,span)");
+    selectorTest(":where()", ":where(div)");
+    selectorTest(":focus-visible", ":focus-visible");
+
+    /*
+     * HTML elements / APIs.
+     */
+
+    section("HTML FEATURES");
+
+    function elementFeature(name, tag, property) {
+
+        let supported = false;
+
+        try {
+            const e =
+                document.createElement(tag);
+
+            supported =
+                property in e;
+
+        } catch(e) {
+            errors++;
+        }
+
+        result(
+            name,
+            supported,
+            tag + "." + property
+        );
+    }
+
+    elementFeature(
+        "dialog.showModal",
+        "dialog",
+        "showModal"
+    );
+
+    elementFeature(
+        "details.open",
+        "details",
+        "open"
+    );
+
+    elementFeature(
+        "template.content",
+        "template",
+        "content"
+    );
+
+    elementFeature(
+        "iframe.srcdoc",
+        "iframe",
+        "srcdoc"
+    );
+
+    /*
+     * Small live checks.
+     */
+
+    section("LIVE CHECKS");
 
     try {
 
-        await testA();
+        const r =
+            document.createRange();
 
-        await delay(200);
-
-        await testB();
-
-        await delay(200);
-
-        await testC();
-
-        await delay(200);
-
-        await testD();
-
-        await delay(200);
-
-        await testE();
-
-        finish();
-
-        log("");
-        log(
-            "======= V23 RESULT =======",
-            "info"
-        );
-
-        log(
-            "STATUS: " +
-            (
-                anomalies === 0
-                ? "NORMAL"
-                : "ANOMALY"
-            ),
-            anomalies === 0
-            ? "ok"
-            : "bad"
-        );
-
-        log(
-            "TESTS COMPLETED: 5"
-        );
-
-        log(
-            "PASS: " + pass
-        );
-
-        log(
-            "EXCEPTIONS: " +
-            exceptions
-        );
-
-        log(
-            "ANOMALIES: " +
-            anomalies
-        );
-
-        log(
-            "==========================",
-            "info"
+        result(
+            "createRange()",
+            !!r
         );
 
     } catch(e) {
 
-        cp(
-            "HARNESS",
-            "UNCAUGHT_EXCEPTION",
-            e.name + ": " + e.message
-        );
-
-        log("");
-        log(
-            "V23 STOPPED",
-            "bad"
-        );
-
-        log(
-            e.name + ": " +
-            e.message,
-            "bad"
-        );
+        errors++;
+        result("createRange()", false);
     }
-}
 
-previous();
+    try {
+
+        const div =
+            document.createElement("div");
+
+        div.innerHTML =
+            "<span>V24</span>";
+
+        const clone =
+            div.cloneNode(true);
+
+        result(
+            "DOM clone",
+            clone.textContent === "V24"
+        );
+
+    } catch(e) {
+
+        errors++;
+        result("DOM clone", false);
+    }
+
+    try {
+
+        const parser =
+            new DOMParser();
+
+        const doc =
+            parser.parseFromString(
+                "<root><x>V24</x></root>",
+                "text/xml"
+            );
+
+        result(
+            "DOMParser XML",
+            doc.documentElement
+               .firstChild
+               .textContent === "V24"
+        );
+
+    } catch(e) {
+
+        errors++;
+        result("DOMParser XML", false);
+    }
+
+    /*
+     * Result
+     */
+
+    section("V24 RESULT");
+
+    log(
+        "SUPPORTED: " + yes,
+        "yes"
+    );
+
+    log(
+        "UNSUPPORTED: " + no,
+        "no"
+    );
+
+    log(
+        "TEST ERRORS: " + errors,
+        errors ? "warn" : "yes"
+    );
+
+    log("");
+    log(
+        "V24 COMPLETE",
+        "info"
+    );
+}
 
 </script>
 </body>
