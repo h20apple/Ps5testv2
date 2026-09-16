@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V19.1 SSV Repro Probe</title>
+<title>PS5 13.60 — V20 SSV Lifetime Matrix</title>
 
 <style>
 body {
@@ -11,10 +11,10 @@ body {
     font:16px monospace;
     padding:18px;
 }
-button,input {
+button {
     font:16px monospace;
-    padding:9px;
-    margin:4px;
+    padding:10px;
+    margin:5px;
 }
 #log {
     background:#17233a;
@@ -26,44 +26,37 @@ button,input {
 .bad  { color:#ff6868; }
 .warn { color:#ffd166; }
 .info { color:#63caff; }
-
-#space {
-    height:1500px;
-}
+#space { height:1500px; }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V19.1 SSV Repro Probe</h2>
+<h2>PS5 13.60 — V20 SSV Lifetime Matrix</h2>
 
-Runs:
-<input id="runs"
-       type="number"
-       value="25"
-       min="1"
-       max="50">
-
-<button onclick="start()">RUN V19.1</button>
+<button onclick="runV20()">RUN V20</button>
 <button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
 
 <div id="space"></div>
-<a id="target">V19.1 fragment target</a>
+
+<a id="v20target" tabindex="0">
+    V20 fragment target
+</a>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V19_1_CP";
+const KEY = "PS5_V20_CP";
 
 const box =
     document.getElementById("log");
 
+let sequence = 0;
+let anomalies = 0;
 let blurCount = 0;
 let replaceCount = 0;
-let anomalyCount = 0;
-let rateLimitCount = 0;
 
 function log(text, cls="") {
 
@@ -77,48 +70,41 @@ function log(text, cls="") {
 }
 
 function delay(ms) {
-
     return new Promise(
-        resolve => setTimeout(resolve, ms)
+        resolve => setTimeout(resolve,ms)
     );
 }
 
-function save(run, phase, extra="") {
+function cp(test, phase, extra="") {
 
-    const data = {
+    sequence++;
+
+    const record = {
         status:"RUNNING",
-        run:run,
+        test:test,
         phase:phase,
         extra:extra,
-        time:Date.now(),
-        href:location.href
+        sequence:sequence,
+        href:location.href,
+        time:Date.now()
     };
 
     try {
         localStorage.setItem(
             KEY,
-            JSON.stringify(data)
+            JSON.stringify(record)
         );
     } catch(e) {}
-}
 
-function finish(runs) {
-
-    try {
-
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"COMPLETE",
-                runs:runs,
-                blur:blurCount,
-                replace:replaceCount,
-                anomalies:anomalyCount,
-                rateLimits:rateLimitCount
-            })
-        );
-
-    } catch(e) {}
+    log(
+        sequence +
+        ": [" +
+        test +
+        "] " +
+        phase +
+        (extra ? " — " + extra : ""),
+        "info"
+    );
 }
 
 function clearCP() {
@@ -131,7 +117,7 @@ function clearCP() {
     );
 }
 
-function previous() {
+function showPrevious() {
 
     try {
 
@@ -141,45 +127,72 @@ function previous() {
         if (!raw)
             return;
 
-        const cp =
+        const c =
             JSON.parse(raw);
 
-        if (cp.status !== "RUNNING")
+        if (c.status !== "RUNNING")
             return;
 
         log(
-            "*******************************",
+            "********************************",
             "bad"
         );
 
         log(
-            "PREVIOUS RUN DID NOT COMPLETE",
+            "PREVIOUS V20 DID NOT COMPLETE",
             "bad"
         );
 
         log(
-            "RUN: " + cp.run,
+            "TEST: " + c.test,
             "bad"
         );
 
         log(
-            "LAST PHASE: " + cp.phase,
+            "LAST PHASE: " + c.phase,
             "bad"
         );
 
-        if (cp.extra) {
+        if (c.extra) {
             log(
-                cp.extra,
+                "DETAIL: " + c.extra,
                 "bad"
             );
         }
 
         log(
-            "*******************************",
+            "********************************",
             "bad"
         );
 
     } catch(e) {}
+}
+
+function complete() {
+
+    try {
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                status:"COMPLETE",
+                anomalies:anomalies,
+                blur:blurCount,
+                replace:replaceCount,
+                time:Date.now()
+            })
+        );
+
+    } catch(e) {}
+}
+
+function stateText(x) {
+
+    try {
+        return JSON.stringify(x);
+    } catch(e) {
+        return "[cannot stringify]";
+    }
 }
 
 function waitPop(timeout=5000) {
@@ -187,15 +200,15 @@ function waitPop(timeout=5000) {
     return new Promise(
         (resolve,reject) => {
 
-            let finished = false;
+            let done = false;
 
             const timer =
                 setTimeout(() => {
 
-                    if (finished)
+                    if (done)
                         return;
 
-                    finished = true;
+                    done = true;
 
                     removeEventListener(
                         "popstate",
@@ -212,10 +225,10 @@ function waitPop(timeout=5000) {
 
             function handler(e) {
 
-                if (finished)
+                if (done)
                     return;
 
-                finished = true;
+                done = true;
 
                 clearTimeout(timer);
 
@@ -230,308 +243,442 @@ function waitPop(timeout=5000) {
     );
 }
 
-function isRateLimit(e) {
+/*
+ * Different state-object shapes.
+ */
 
-    const s =
-        String(e);
+function originalState(test) {
 
-    return (
-        e &&
-        e.name === "SecurityError" &&
-        (
-            s.indexOf("100 times") !== -1 ||
-            s.indexOf("replaceState") !== -1
-        )
-    );
+    return {
+        type:"original",
+        test:test,
+        marker:0x2020,
+        text:"V20_ORIGINAL",
+        nested:{
+            a:1,
+            b:2,
+            c:"three"
+        },
+        array:[
+            10,
+            20,
+            30,
+            40
+        ]
+    };
 }
 
-async function oneRun(n) {
+function replacementState(test) {
 
-    save(n,"RUN_START");
+    return {
+        type:"replacement",
+        test:test,
+        marker:0x20FF,
+        text:"V20_REPLACEMENT",
+        nested:{
+            x:"alpha",
+            y:"beta"
+        },
+        array:[
+            "A",
+            "B",
+            "C"
+        ]
+    };
+}
 
-    /*
-     * Known starting entry.
-     */
+async function oneTest(name, mode) {
 
-    try {
-
-        history.replaceState(
-            "v19-base-" + n,
-            "",
-            location.pathname
-        );
-
-    } catch(e) {
-
-        if (isRateLimit(e)) {
-
-            rateLimitCount++;
-
-            save(
-                n,
-                "HISTORY_RATE_LIMIT",
-                String(e)
-            );
-
-            throw new Error(
-                "RATE_LIMIT"
-            );
-        }
-
-        throw e;
-    }
+    cp(
+        name,
+        "TEST_START"
+    );
 
     /*
-     * Focus element.
+     * Clean starting entry.
      */
+
+    history.replaceState(
+        {
+            type:"base",
+            test:name
+        },
+        "",
+        location.pathname
+    );
+
+    const original =
+        originalState(name);
+
+    cp(
+        name,
+        "PUSH_FRAGMENT",
+        stateText(original)
+    );
+
+    history.pushState(
+        original,
+        "",
+        location.pathname +
+        "#v20target"
+    );
+
+    history.pushState(
+        {
+            type:"current",
+            test:name,
+            marker:0x2001
+        },
+        "",
+        location.pathname
+    );
+
+    cp(
+        name,
+        "CREATE_FOCUS_ELEMENT"
+    );
 
     const input =
         document.createElement("input");
 
     input.value =
-        "V19.1 run " + n;
+        "V20 " + name;
 
     document.body.insertBefore(
         input,
         document.body.firstChild
     );
 
-    save(n,"PUSH_FRAGMENT");
-
-    history.pushState(
-        "v19-original-" + n,
-        "",
-        location.pathname + "#target"
-    );
-
-    save(n,"PUSH_CURRENT");
-
-    history.pushState(
-        "v19-current-" + n,
-        "",
-        location.pathname
-    );
-
-    let sawBlur = false;
-    let sawReplace = false;
+    let localBlur = 0;
+    let localReplace = 0;
 
     input.onblur = function() {
 
-        sawBlur = true;
+        localBlur++;
         blurCount++;
 
-        save(
-            n,
+        cp(
+            name,
             "BLUR_ENTER"
         );
 
-        try {
+        cp(
+            name,
+            "STATE_AT_BLUR",
+            stateText(history.state)
+        );
 
-            save(
-                n,
+        /*
+         * MODE 1:
+         * ordinary V17/V18-style replacement.
+         */
+
+        if (mode === 1) {
+
+            cp(
+                name,
                 "BEFORE_REPLACE"
             );
 
             history.replaceState(
-                "v19-replacement-" + n,
+                replacementState(name),
                 "",
                 location.href
             );
 
-            sawReplace = true;
+            localReplace++;
             replaceCount++;
 
-            save(
-                n,
-                "AFTER_REPLACE"
+            cp(
+                name,
+                "AFTER_REPLACE",
+                stateText(history.state)
             );
-
-        } catch(e) {
-
-            if (isRateLimit(e)) {
-
-                rateLimitCount++;
-
-                save(
-                    n,
-                    "HISTORY_RATE_LIMIT_IN_BLUR",
-                    String(e)
-                );
-
-                return;
-            }
-
-            save(
-                n,
-                "BLUR_JS_EXCEPTION",
-                String(e)
-            );
-
-            throw e;
         }
 
-        save(
-            n,
+        /*
+         * MODE 2:
+         * Remove the focused element while
+         * its blur handler is executing.
+         */
+
+        if (mode === 2) {
+
+            cp(
+                name,
+                "REMOVE_FOCUSED_ELEMENT"
+            );
+
+            input.remove();
+
+            cp(
+                name,
+                "AFTER_ELEMENT_REMOVE"
+            );
+
+            history.replaceState(
+                replacementState(name),
+                "",
+                location.href
+            );
+
+            localReplace++;
+            replaceCount++;
+
+            cp(
+                name,
+                "AFTER_REPLACE",
+                stateText(history.state)
+            );
+        }
+
+        /*
+         * MODE 3:
+         * Two sequential replacements from
+         * the same callback.
+         */
+
+        if (mode === 3) {
+
+            cp(
+                name,
+                "REPLACE_ONE"
+            );
+
+            history.replaceState(
+                {
+                    type:"intermediate",
+                    test:name,
+                    marker:0x2055
+                },
+                "",
+                location.href
+            );
+
+            localReplace++;
+            replaceCount++;
+
+            cp(
+                name,
+                "REPLACE_TWO"
+            );
+
+            history.replaceState(
+                replacementState(name),
+                "",
+                location.href
+            );
+
+            localReplace++;
+            replaceCount++;
+
+            cp(
+                name,
+                "AFTER_SECOND_REPLACE",
+                stateText(history.state)
+            );
+        }
+
+        /*
+         * MODE 4:
+         * More complicated structured state.
+         */
+
+        if (mode === 4) {
+
+            const complex = {
+                type:"complex",
+                test:name,
+                marker:0x20CC,
+
+                strings:[
+                    "one",
+                    "two",
+                    "three"
+                ],
+
+                numbers:[
+                    1,
+                    2,
+                    3,
+                    4,
+                    5
+                ],
+
+                nested:{
+                    level1:{
+                        level2:{
+                            value:
+                            "V20_COMPLEX"
+                        }
+                    }
+                }
+            };
+
+            cp(
+                name,
+                "COMPLEX_REPLACE",
+                stateText(complex)
+            );
+
+            history.replaceState(
+                complex,
+                "",
+                location.href
+            );
+
+            localReplace++;
+            replaceCount++;
+
+            cp(
+                name,
+                "AFTER_COMPLEX_REPLACE",
+                stateText(history.state)
+            );
+        }
+
+        cp(
+            name,
             "BLUR_EXIT"
         );
     };
 
-    save(
-        n,
+    cp(
+        name,
         "BEFORE_FOCUS"
     );
 
     input.focus();
 
-    await delay(50);
+    cp(
+        name,
+        "AFTER_FOCUS"
+    );
+
+    await delay(100);
 
     const pop =
         waitPop();
 
-    save(
-        n,
-        "BEFORE_HISTORY_BACK"
+    cp(
+        name,
+        "BEFORE_BACK"
     );
 
     history.back();
 
-    save(
-        n,
-        "HISTORY_BACK_RETURNED"
+    cp(
+        name,
+        "BACK_RETURNED"
     );
 
     const event =
         await pop;
 
-    save(
-        n,
-        "POPSTATE_RECEIVED"
+    cp(
+        name,
+        "POPSTATE",
+        stateText(event.state)
     );
 
-    await delay(100);
+    cp(
+        name,
+        "HISTORY_STATE",
+        stateText(history.state)
+    );
+
+    await delay(200);
 
     /*
-     * Observable integrity checks.
+     * Original JS object should remain intact.
      */
 
-    if (!sawBlur) {
-
-        anomalyCount++;
-
-        log(
-            "Run " + n +
-            ": BLUR MISSING",
-            "bad"
-        );
-    }
-
-    if (!sawReplace) {
-
-        anomalyCount++;
-
-        log(
-            "Run " + n +
-            ": REPLACE MISSING",
-            "bad"
-        );
-    }
+    cp(
+        name,
+        "ORIGINAL_INTEGRITY"
+    );
 
     if (
-        sawReplace &&
-        history.state !==
-            "v19-replacement-" + n
+        original.type !== "original" ||
+        original.marker !== 0x2020 ||
+        original.text !== "V20_ORIGINAL" ||
+        original.nested.a !== 1 ||
+        original.array[2] !== 30
     ) {
 
-        anomalyCount++;
+        anomalies++;
 
-        log(
-            "Run " + n +
-            ": HISTORY STATE MISMATCH",
-            "bad"
+        cp(
+            name,
+            "ORIGINAL_OBJECT_ANOMALY",
+            stateText(original)
         );
     }
 
-    if (event.state == null) {
+    if (localBlur !== 1) {
 
-        anomalyCount++;
+        anomalies++;
 
-        log(
-            "Run " + n +
-            ": POPSTATE STATE NULL",
-            "bad"
+        cp(
+            name,
+            "BLUR_COUNT_ANOMALY",
+            String(localBlur)
         );
     }
 
-    save(
-        n,
-        "CLEANUP"
-    );
+    if (localReplace < 1) {
+
+        anomalies++;
+
+        cp(
+            name,
+            "REPLACE_COUNT_ANOMALY",
+            String(localReplace)
+        );
+    }
+
+    /*
+     * Remove it here if mode 2 didn't
+     * already remove it.
+     */
 
     input.onblur = null;
 
-    input.remove();
+    if (input.parentNode)
+        input.remove();
 
-    try {
-
-        history.replaceState(
-            null,
-            "",
-            location.pathname
-        );
-
-    } catch(e) {
-
-        if (isRateLimit(e)) {
-
-            rateLimitCount++;
-
-            save(
-                n,
-                "HISTORY_RATE_LIMIT_CLEANUP",
-                String(e)
-            );
-
-        } else {
-
-            throw e;
-        }
-    }
-
-    save(
-        n,
-        "RUN_COMPLETE"
+    history.replaceState(
+        null,
+        "",
+        location.pathname
     );
+
+    cp(
+        name,
+        "TEST_COMPLETE"
+    );
+
+    /*
+     * Keep well clear of the History API
+     * rate limit encountered in V19.
+     */
+
+    await delay(1000);
 }
 
-async function start() {
+async function runV20() {
 
     box.innerHTML = "";
 
-    previous();
+    showPrevious();
 
+    sequence = 0;
+    anomalies = 0;
     blurCount = 0;
     replaceCount = 0;
-    anomalyCount = 0;
-    rateLimitCount = 0;
-
-    let runs =
-        Number(
-            document.getElementById("runs").value
-        );
-
-    runs =
-        Math.max(
-            1,
-            Math.min(
-                50,
-                Number.isFinite(runs)
-                    ? runs
-                    : 25
-            )
-        );
 
     log(
-        "V19.1 START",
+        "V20 START",
         "info"
     );
 
@@ -539,96 +686,52 @@ async function start() {
         navigator.userAgent
     );
 
-    log(
-        "Runs requested: " + runs
-    );
-
-    log(
-        "Inter-run delay: 750 ms"
-    );
-
     log("");
 
     try {
 
-        for (
-            let n=1;
-            n<=runs;
-            n++
-        ) {
+        await oneTest(
+            "A_NORMAL",
+            1
+        );
 
-            log(
-                "RUN " +
-                n +
-                "/" +
-                runs
-            );
+        await oneTest(
+            "B_REMOVE_DURING_BLUR",
+            2
+        );
 
-            try {
+        await oneTest(
+            "C_DOUBLE_REPLACE",
+            3
+        );
 
-                await oneRun(n);
+        await oneTest(
+            "D_COMPLEX_STATE",
+            4
+        );
 
-            } catch(e) {
-
-                if (
-                    String(e).indexOf(
-                        "RATE_LIMIT"
-                    ) !== -1
-                ) {
-
-                    log(
-                        "RATE LIMIT encountered",
-                        "warn"
-                    );
-
-                    /*
-                     * Wait for the History API
-                     * rate window to clear.
-                     */
-
-                    await delay(11000);
-
-                    continue;
-                }
-
-                save(
-                    n,
-                    "JS_EXCEPTION",
-                    String(e)
-                );
-
-                throw e;
-            }
-
-            /*
-             * Deliberately slower than V19.
-             */
-
-            await delay(750);
-        }
-
-        finish(runs);
+        complete();
 
         log("");
         log(
-            "======= V19.1 RESULT =======",
+            "======= V20 RESULT =======",
             "info"
         );
 
         log(
             "STATUS: " +
             (
-                anomalyCount === 0
+                anomalies === 0
                     ? "NORMAL"
                     : "ANOMALY"
             ),
-            anomalyCount === 0
+            anomalies === 0
                 ? "ok"
                 : "bad"
         );
 
         log(
-            "COMPLETED: " + runs
+            "TESTS COMPLETED: 4"
         );
 
         log(
@@ -637,30 +740,31 @@ async function start() {
         );
 
         log(
-            "REPLACE CALLBACKS: " +
+            "REPLACE CALLS: " +
             replaceCount
         );
 
         log(
             "ANOMALIES: " +
-            anomalyCount
+            anomalies
         );
 
         log(
-            "RATE LIMITS: " +
-            rateLimitCount
-        );
-
-        log(
-            "============================",
+            "==========================",
             "info"
         );
 
     } catch(e) {
 
+        cp(
+            "HARNESS",
+            "JS_EXCEPTION",
+            String(e)
+        );
+
         log("");
         log(
-            "V19.1 STOPPED",
+            "V20 STOPPED",
             "bad"
         );
 
@@ -671,7 +775,7 @@ async function start() {
     }
 }
 
-previous();
+showPrevious();
 
 </script>
 </body>
