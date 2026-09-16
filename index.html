@@ -1,64 +1,59 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V35.4 TransformStream Targeted Substitution</title>
+<title>PS5 13.60 - V35.5 A/B TransformStream PoC</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
-    font:16px monospace;
+    font:17px monospace;
     padding:20px;
 }
-button {
-    font:18px monospace;
-    padding:10px 18px;
+button,select {
+    font:17px monospace;
+    padding:10px;
+    margin:5px;
 }
 #status {
-    margin:15px 0;
-    padding:10px;
     border:1px solid #555;
+    padding:10px;
+    margin-top:15px;
 }
 pre {
     white-space:pre-wrap;
-    word-break:break-word;
 }
 </style>
 
-<h2>PS5 13.60 — V35.4</h2>
-<p>TransformStream targeted iterator substitution</p>
+<h2>PS5 13.60 — V35.5</h2>
+<p>Minimal TransformStream A/B crash reproducer</p>
 
-<button id="run">RUN V35.4</button>
+<select id="mode">
+    <option value="control">A — CONTROL</option>
+    <option value="substitute">B — {} SUBSTITUTION</option>
+</select>
+
+<button id="run">RUN ONCE</button>
+
 <div id="status">READY</div>
-<pre id="log"></pre>
+<pre id="out"></pre>
 
 <script>
 "use strict";
 
-const out = document.querySelector("#log");
-const statusBox = document.querySelector("#status");
-const button = document.querySelector("#run");
-
 const originalIterator =
     Array.prototype[Symbol.iterator];
 
-let iteratorCalls = 0;
-let nextCalls = 0;
-let substitutions = 0;
+const out =
+    document.querySelector("#out");
 
-function log(x) {
-    out.textContent += x + "\n";
-    console.log(x);
-}
+const statusBox =
+    document.querySelector("#status");
 
-function checkpoint(x) {
-    try {
-        localStorage.setItem(
-            "V354_CHECKPOINT",
-            x
-        );
-    } catch (_) {}
+const runButton =
+    document.querySelector("#run");
 
-    log("[CP] " + x);
+function log(s) {
+    out.textContent += s + "\n";
 }
 
 function restore() {
@@ -66,72 +61,43 @@ function restore() {
         originalIterator;
 }
 
-function showPrevious() {
-    try {
-        const x =
-            localStorage.getItem(
-                "V354_CHECKPOINT"
-            );
-
-        if (x)
-            log("PREVIOUS CHECKPOINT: " + x);
-
-    } catch (_) {}
-}
-
 function run() {
 
-    button.disabled = true;
+    runButton.disabled = true;
+
+    const mode =
+        document.querySelector("#mode").value;
+
     out.textContent = "";
 
-    iteratorCalls = 0;
-    nextCalls = 0;
-    substitutions = 0;
+    log("V35.5");
+    log("MODE: " + mode);
+    log("");
 
     statusBox.textContent =
-        "STATUS: RUNNING";
+        "RUNNING";
 
-    log("PS5 13.60 — V35.4");
-    log("Target: iterator #2 / length 3 / index 1");
-    log("");
-    log(navigator.userAgent);
-    log("");
-
-    if (typeof TransformStream !== "function") {
-
-        log("TransformStream unsupported");
-
-        statusBox.textContent =
-            "STATUS: UNSUPPORTED";
-
-        button.disabled = false;
-        return;
-    }
-
-    checkpoint("01_BEFORE_OVERRIDE");
+    let iteratorNumber = 0;
+    let substitutionCount = 0;
 
     /*
      * V35.3 established:
      *
-     * Iterator #1:
-     *   length = 2
+     * iterator #1 -> length 2
+     * iterator #2 -> length 3
      *
-     * Iterator #2:
-     *   length = 3
-     *
-     * This testcase changes ONLY index 1
-     * from the second iterator.
+     * The only A/B difference below is whether
+     * iterator #2, index 1 is replaced with {}.
      */
 
     Array.prototype[Symbol.iterator] =
         function() {
 
-            iteratorCalls++;
-
-            const iteratorID =
-                iteratorCalls;
-
             const array = this;
+
+            const id =
+                ++iteratorNumber;
+
             const initialLength =
                 array.length;
 
@@ -140,13 +106,12 @@ function run() {
             return {
                 next() {
 
-                    nextCalls++;
-
-                    if (index >= array.length) {
-
+                    if (
+                        index >=
+                        array.length
+                    ) {
                         return {
-                            done:true,
-                            value:undefined
+                            done:true
                         };
                     }
 
@@ -154,21 +119,13 @@ function run() {
                         array[index];
 
                     if (
-                        iteratorID === 2 &&
+                        mode === "substitute" &&
+                        id === 2 &&
                         initialLength === 3 &&
                         index === 1
                     ) {
-
-                        /*
-                         * Ordinary JS object only.
-                         */
-
-                        value = {
-                            marker:"V354",
-                            index:1
-                        };
-
-                        substitutions++;
+                        value = {};
+                        substitutionCount++;
                     }
 
                     index++;
@@ -181,164 +138,75 @@ function run() {
             };
         };
 
-    checkpoint("02_OVERRIDE_INSTALLED");
-
-    let stream = null;
-    let thrown = null;
+    let stream;
+    let error = null;
 
     try {
-
-        checkpoint(
-            "03_BEFORE_TRANSFORMSTREAM"
-        );
 
         stream =
             new TransformStream();
 
-        /*
-         * If the constructor reaches here,
-         * the substituted value did not cause
-         * a synchronous exception.
-         */
-
-        checkpoint(
-            "04_TRANSFORMSTREAM_RETURNED"
-        );
-
     } catch(e) {
 
-        /*
-         * Save primitive information before
-         * restoring the iterator.
-         */
-
-        thrown = {
-            name:
-                String(e.name),
-
-            message:
-                String(e.message),
-
-            isTypeError:
-                e instanceof TypeError
+        error = {
+            name:String(e.name),
+            message:String(e.message)
         };
     }
 
     /*
-     * Restore immediately.
+     * Restore immediately if constructor returns
+     * or throws normally.
      */
 
     restore();
 
-    checkpoint(
-        "05_ITERATOR_RESTORED"
-    );
-
-    log("");
-    log("==========================");
-    log("OBSERVATION");
-    log("==========================");
-
     log(
-        "iteratorCalls = " +
-        iteratorCalls
+        "iterator calls: " +
+        iteratorNumber
     );
 
     log(
-        "nextCalls = " +
-        nextCalls
+        "substitutions: " +
+        substitutionCount
     );
 
-    log(
-        "substitutions = " +
-        substitutions
-    );
-
-    log("");
-
-    if (thrown) {
+    if (error) {
 
         log(
-            "Constructor threw:"
-        );
-
-        log(
-            thrown.name +
+            "exception: " +
+            error.name +
             ": " +
-            thrown.message
+            error.message
         );
 
-        log(
-            "TypeError = " +
-            thrown.isTypeError
-        );
-
-        if (thrown.isTypeError) {
-
-            log("");
-            log(
-                "RESULT: NORMAL TYPEERROR"
-            );
-
-        } else {
-
-            log("");
-            log(
-                "RESULT: NON-TYPEERROR EXCEPTION"
-            );
-        }
+        statusBox.textContent =
+            "NORMAL JS EXCEPTION";
 
     } else {
 
         log(
-            "TransformStream returned normally"
+            "constructor returned"
         );
 
-        if (stream) {
+        log(
+            "readable: " +
+            typeof stream.readable
+        );
 
-            log(
-                "readable = " +
-                typeof stream.readable
-            );
+        log(
+            "writable: " +
+            typeof stream.writable
+        );
 
-            log(
-                "writable = " +
-                typeof stream.writable
-            );
-        }
-
-        log("");
-
-        if (substitutions === 1) {
-
-            log(
-                "RESULT: TARGET SUBSTITUTION REACHED"
-            );
-
-        } else {
-
-            log(
-                "RESULT: TARGET WAS NOT REACHED"
-            );
-        }
+        statusBox.textContent =
+            "COMPLETED";
     }
 
-    checkpoint("06_COMPLETE");
-
-    log("");
-    log("==========================");
-    log("V35.4 COMPLETE");
-    log("==========================");
-
-    statusBox.textContent =
-        "STATUS: COMPLETE";
-
-    button.disabled = false;
+    runButton.disabled = false;
 }
 
-showPrevious();
-
-button.onclick = run;
+runButton.onclick = run;
 
 window.addEventListener(
     "pagehide",
