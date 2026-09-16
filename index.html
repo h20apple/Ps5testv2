@@ -1,13 +1,13 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V35 TransformStream Iterator Probe</title>
+<title>PS5 13.60 - V35.1 Minimal TransformStream Test</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
-    font:15px monospace;
-    padding:18px;
+    font:16px monospace;
+    padding:20px;
 }
 button {
     font:18px monospace;
@@ -24,11 +24,10 @@ pre {
 }
 </style>
 
-<h2>PS5 13.60 — V35</h2>
-<div>TransformStream iterator reachability / crash probe</div>
+<h2>PS5 13.60 — V35.1</h2>
+<p>Minimal TransformStream iterator control</p>
 
-<p><button id="run">RUN V35</button></p>
-
+<button id="run">RUN V35.1</button>
 <div id="status">READY</div>
 <pre id="log"></pre>
 
@@ -36,29 +35,39 @@ pre {
 "use strict";
 
 const out = document.querySelector("#log");
-const status = document.querySelector("#status");
+const statusBox = document.querySelector("#status");
 const button = document.querySelector("#run");
 
 const originalIterator =
     Array.prototype[Symbol.iterator];
 
-let tests = 0;
-let completed = 0;
-let exceptions = 0;
-let anomalies = 0;
+let iteratorCalls = 0;
+let nextCalls = 0;
 
 function log(x) {
     out.textContent += x + "\n";
     console.log(x);
 }
 
-function cp(x) {
+function checkpoint(x) {
+    /*
+     * Use both localStorage and the URL hash.
+     *
+     * The hash gives us another browser-visible
+     * indication if localStorage doesn't survive.
+     */
+
     try {
         localStorage.setItem(
-            "PS5_V35_CP",
+            "V351_CHECKPOINT",
             x
         );
-    } catch (_) {}
+    } catch(e) {}
+
+    try {
+        location.hash =
+            encodeURIComponent(x);
+    } catch(e) {}
 
     log("[CP] " + x);
 }
@@ -68,517 +77,257 @@ function restore() {
         originalIterator;
 }
 
-function installIterator(name, transform) {
+function previousCheckpoint() {
 
-    let iteratorCalls = 0;
-    let nextCalls = 0;
-
-    Array.prototype[Symbol.iterator] =
-        function() {
-
-            iteratorCalls++;
-
-            const arr = this;
-            let i = 0;
-
-            cp(
-                name +
-                ":ITERATOR_CALL_" +
-                iteratorCalls +
-                ":LEN_" +
-                arr.length
-            );
-
-            return {
-                next() {
-
-                    nextCalls++;
-
-                    cp(
-                        name +
-                        ":NEXT_" +
-                        nextCalls
-                    );
-
-                    if (i >= arr.length) {
-                        return {
-                            done:true,
-                            value:undefined
-                        };
-                    }
-
-                    const original =
-                        arr[i];
-
-                    const replacement =
-                        transform(
-                            original,
-                            i,
-                            arr
-                        );
-
-                    log(
-                        "[" + name + "] index=" +
-                        i +
-                        " len=" +
-                        arr.length +
-                        " originalType=" +
-                        typeof original +
-                        " returnedType=" +
-                        typeof replacement
-                    );
-
-                    i++;
-
-                    return {
-                        done:false,
-                        value:replacement
-                    };
-                },
-
-                return() {
-
-                    cp(
-                        name +
-                        ":ITERATOR_RETURN"
-                    );
-
-                    return {
-                        done:true
-                    };
-                }
-            };
-        };
-
-    return function stats() {
-        return {
-            iteratorCalls,
-            nextCalls
-        };
-    };
-}
-
-async function runCase(
-    name,
-    transform
-) {
-    tests++;
-
-    log("");
-    log("============================");
-    log(name);
-    log("============================");
-
-    cp(name + ":START");
-
-    let stats;
+    let stored = null;
 
     try {
-
-        stats =
-            installIterator(
-                name,
-                transform
+        stored =
+            localStorage.getItem(
+                "V351_CHECKPOINT"
             );
+    } catch(e) {}
 
-        cp(
-            name +
-            ":BEFORE_CONSTRUCTOR"
-        );
-
-        let stream;
-
-        try {
-
-            stream =
-                new TransformStream();
-
-            cp(
-                name +
-                ":CONSTRUCTOR_RETURNED"
-            );
-
-            log(
-                "[" + name +
-                "] constructor SUCCESS"
-            );
-
-            log(
-                "[" + name +
-                "] readable=" +
-                typeof stream.readable
-            );
-
-            log(
-                "[" + name +
-                "] writable=" +
-                typeof stream.writable
-            );
-
-        } catch(e) {
-
-            exceptions++;
-
-            cp(
-                name +
-                ":CONSTRUCTOR_EXCEPTION"
-            );
-
-            log(
-                "[" + name +
-                "] exception=" +
-                e.name +
-                ": " +
-                e.message
-            );
-        }
-
-        const s = stats();
-
+    if (stored) {
         log(
-            "[" + name +
-            "] iteratorCalls=" +
-            s.iteratorCalls
+            "PREVIOUS CHECKPOINT: " +
+            stored
         );
+    }
 
+    if (location.hash) {
         log(
-            "[" + name +
-            "] nextCalls=" +
-            s.nextCalls
+            "URL CHECKPOINT: " +
+            decodeURIComponent(
+                location.hash.slice(1)
+            )
         );
-
-        /*
-         * The crucial result:
-         *
-         * If iteratorCalls == 0, the supplied
-         * candidate's Array iterator assumption
-         * is not being reached here.
-         */
-
-        if (s.iteratorCalls === 0) {
-
-            log(
-                "[" + name +
-                "] Array iterator NOT reached"
-            );
-
-        } else {
-
-            log(
-                "[" + name +
-                "] Array iterator REACHED"
-            );
-        }
-
-        completed++;
-
-        cp(name + ":COMPLETE");
-
-    } catch(e) {
-
-        exceptions++;
-
-        log(
-            "[" + name +
-            "] top-level exception: " +
-            e
-        );
-
-        cp(name + ":TOP_EXCEPTION");
-
-    } finally {
-
-        restore();
     }
 }
 
 async function run() {
 
     button.disabled = true;
-    out.textContent = "";
 
-    tests = 0;
-    completed = 0;
-    exceptions = 0;
-    anomalies = 0;
-
-    status.textContent =
+    statusBox.textContent =
         "STATUS: RUNNING";
 
-    const previous =
-        localStorage.getItem(
-            "PS5_V35_CP"
-        );
-
-    if (previous) {
-        log(
-            "PREVIOUS CHECKPOINT: " +
-            previous
-        );
-        log("");
-    }
-
-    log("PS5 13.60 — V35");
-    log(
-        "TransformStream Iterator Probe"
-    );
     log("");
+    log("==========================");
+    log("V35.1 START");
+    log("==========================");
+
     log(navigator.userAgent);
+    log("");
 
     if (
         typeof TransformStream !==
         "function"
     ) {
-
         log(
             "TransformStream unavailable"
         );
 
-        status.textContent =
-            "STATUS: UNSUPPORTED";
+        statusBox.textContent =
+            "UNSUPPORTED";
 
         button.disabled = false;
         return;
     }
 
-
-    /*
-     * CASE A
-     *
-     * Control.
-     * Return every original value unchanged.
-     */
-
-    await runCase(
-        "A_CONTROL",
-        function(value) {
-            return value;
-        }
+    checkpoint(
+        "01_BEFORE_OVERRIDE"
     );
 
-
     /*
-     * CASE B
+     * Minimal control override.
      *
-     * Plain object substitution.
+     * Every original array value is returned
+     * unchanged.
      */
 
-    await runCase(
-        "B_PLAIN_OBJECT",
-        function(value, i, arr) {
+    Array.prototype[Symbol.iterator] =
+        function() {
 
-            if (
-                arr.length === 3 &&
-                i >= 1
-            ) {
-                return {
-                    marker:"V35",
-                    index:i
-                };
-            }
+            iteratorCalls++;
 
-            return value;
-        }
-    );
+            const array = this;
+            let index = 0;
 
+            /*
+             * Avoid logging from inside here.
+             *
+             * console/logging code may itself use
+             * arrays and would contaminate the test.
+             */
 
-    /*
-     * CASE C
-     *
-     * Primitive substitution.
-     */
+            return {
+                next() {
 
-    await runCase(
-        "C_PRIMITIVE",
-        function(value, i, arr) {
+                    nextCalls++;
 
-            if (
-                arr.length === 3 &&
-                i >= 1
-            ) {
-                return 0x41414141;
-            }
-
-            return value;
-        }
-    );
-
-
-    /*
-     * CASE D
-     *
-     * null substitution.
-     */
-
-    await runCase(
-        "D_NULL",
-        function(value, i, arr) {
-
-            if (
-                arr.length === 3 &&
-                i >= 1
-            ) {
-                return null;
-            }
-
-            return value;
-        }
-    );
-
-
-    /*
-     * CASE E
-     *
-     * Object with observable getters.
-     */
-
-    await runCase(
-        "E_GETTER_OBJECT",
-        function(value, i, arr) {
-
-            if (
-                arr.length === 3 &&
-                i >= 1
-            ) {
-
-                const object = {};
-
-                Object.defineProperty(
-                    object,
-                    "value",
-                    {
-                        get() {
-
-                            cp(
-                                "E_GETTER_OBJECT:" +
-                                "GETTER_EXECUTED"
-                            );
-
-                            log(
-                                "[E] getter executed"
-                            );
-
-                            return 1234;
-                        }
+                    if (
+                        index >=
+                        array.length
+                    ) {
+                        return {
+                            value:undefined,
+                            done:true
+                        };
                     }
-                );
 
-                return object;
-            }
+                    return {
+                        value:
+                            array[index++],
+                        done:false
+                    };
+                }
+            };
+        };
 
-            return value;
-        }
+    checkpoint(
+        "02_OVERRIDE_INSTALLED"
     );
 
+    let stream = null;
+
+    try {
+
+        checkpoint(
+            "03_BEFORE_TRANSFORMSTREAM"
+        );
+
+        stream =
+            new TransformStream();
+
+        checkpoint(
+            "04_TRANSFORMSTREAM_RETURNED"
+        );
+
+    } catch(e) {
+
+        /*
+         * Restore before logging the exception.
+         */
+
+        restore();
+
+        checkpoint(
+            "04_CONSTRUCTOR_EXCEPTION"
+        );
+
+        log(
+            "Constructor exception:"
+        );
+
+        log(
+            e.name +
+            ": " +
+            e.message
+        );
+
+        statusBox.textContent =
+            "STATUS: EXCEPTION";
+
+        button.disabled = false;
+
+        return;
+    }
 
     /*
-     * CASE F
-     *
-     * Retained ordinary JS object.
+     * Restore immediately.
      */
-
-    const retained = {
-        marker:"RETAINED",
-        nested:{
-            value:0x1337
-        }
-    };
-
-    await runCase(
-        "F_RETAINED_OBJECT",
-        function(value, i, arr) {
-
-            if (
-                arr.length === 3 &&
-                i >= 1
-            ) {
-                return retained;
-            }
-
-            return value;
-        }
-    );
-
-    log("");
-    log(
-        "[F] retained marker=" +
-        retained.marker
-    );
-
-    log(
-        "[F] retained value=" +
-        retained.nested.value
-    );
-
 
     restore();
 
-    cp("V35:COMPLETE");
+    checkpoint(
+        "05_ITERATOR_RESTORED"
+    );
 
     log("");
-    log("============================");
-    log("V35 RESULT");
-    log("============================");
-
     log(
-        "TESTS: " +
-        tests
+        "TransformStream constructor: SUCCESS"
     );
 
     log(
-        "COMPLETED: " +
-        completed
+        "iteratorCalls = " +
+        iteratorCalls
     );
 
     log(
-        "EXCEPTIONS: " +
-        exceptions
+        "nextCalls = " +
+        nextCalls
+    );
+
+    if (stream) {
+
+        log(
+            "readable = " +
+            typeof stream.readable
+        );
+
+        log(
+            "writable = " +
+            typeof stream.writable
+        );
+    }
+
+    checkpoint(
+        "06_COMPLETE"
+    );
+
+    log("");
+    log("==========================");
+    log("V35.1 RESULT");
+    log("==========================");
+
+    if (iteratorCalls === 0) {
+
+        log(
+            "Array iterator NOT observed"
+        );
+
+    } else {
+
+        log(
+            "Array iterator WAS observed"
+        );
+    }
+
+    log(
+        "iteratorCalls: " +
+        iteratorCalls
     );
 
     log(
-        "ANOMALIES: " +
-        anomalies
+        "nextCalls: " +
+        nextCalls
     );
 
-    log("============================");
+    log("==========================");
 
-    status.textContent =
+    statusBox.textContent =
         "STATUS: COMPLETE";
 
     button.disabled = false;
 }
 
+
+/*
+ * Show previous state before doing anything.
+ */
+
+previousCheckpoint();
+
 button.onclick = run;
 
 window.addEventListener(
-    "error",
-    function(e) {
-
-        try {
-            restore();
-        } catch (_) {}
-
-        cp("V35:WINDOW_ERROR");
-
-        log(
-            "[WINDOW ERROR] " +
-            e.message
-        );
-    }
+    "pagehide",
+    restore
 );
 
 window.addEventListener(
-    "unhandledrejection",
-    function(e) {
-
-        cp(
-            "V35:UNHANDLED_REJECTION"
-        );
-
-        log(
-            "[UNHANDLED REJECTION] " +
-            e.reason
-        );
-    }
+    "beforeunload",
+    restore
 );
 </script>
