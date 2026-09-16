@@ -2,419 +2,302 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 V14 SSV Probe</title>
+<title>PS5 V15 SerializedScriptValue Regression</title>
+
 <style>
-body{
-  background:#101827;color:#eee;
-  font:16px monospace;padding:18px
+body {
+    background:#101827;
+    color:#eee;
+    font:17px monospace;
+    padding:20px;
 }
-button{font:16px monospace;padding:10px;margin:5px}
-#log{
-  background:#17233a;padding:14px;margin-top:12px;
-  white-space:pre-wrap
+button {
+    font:17px monospace;
+    padding:10px 18px;
 }
-.ok{color:#59ff7a}.bad{color:#ff6868}
-.warn{color:#ffd166}.info{color:#63caff}
+#log {
+    background:#17233a;
+    margin-top:15px;
+    padding:15px;
+    white-space:pre-wrap;
+}
+.ok { color:#59ff7a; }
+.bad { color:#ff6868; }
+.info { color:#63caff; }
+.warn { color:#ffd166; }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V14 SSV Lifetime Probe</h2>
+<h2>PS5 13.60 — V15 SSV Regression</h2>
 
-<button onclick="run()">RUN V14</button>
-<button onclick="clearCheckpoint()">CLEAR CHECKPOINT</button>
+<button onclick="runV15()">RUN V15</button>
 
 <div id="log"></div>
 
 <script>
 "use strict";
 
-const logBox = document.getElementById("log");
-const KEY = "PS5_V14_SSV_CP";
+const KEY = "PS5_V15_CHECKPOINT";
+const box = document.getElementById("log");
 
-let popCount = 0;
-let blurCount = 0;
-let focusCount = 0;
-
-function log(s,c=""){
-  const d=document.createElement("div");
-  d.textContent=s;
-  d.className=c;
-  logBox.appendChild(d);
+function log(text, cls="") {
+    const d = document.createElement("div");
+    d.textContent = text;
+    d.className = cls;
+    box.appendChild(d);
 }
 
-function cp(phase,extra={}) {
-  try {
-    localStorage.setItem(KEY,JSON.stringify({
-      state:"RUNNING",
-      phase,
-      time:Date.now(),
-      ...extra
-    }));
-  } catch(e){}
+function checkpoint(phase) {
+    try {
+        localStorage.setItem(KEY, JSON.stringify({
+            state: "RUNNING",
+            phase: phase,
+            time: Date.now()
+        }));
+    } catch(e) {}
 }
 
-function done() {
-  try {
-    localStorage.setItem(KEY,JSON.stringify({
-      state:"COMPLETE",
-      time:Date.now()
-    }));
-  } catch(e){}
+function complete() {
+    try {
+        localStorage.setItem(KEY, JSON.stringify({
+            state: "COMPLETE",
+            time: Date.now()
+        }));
+    } catch(e) {}
 }
 
-function previous() {
-  try {
-    const x=JSON.parse(localStorage.getItem(KEY));
-    if(x && x.state==="RUNNING"){
-      log("****************************","bad");
-      log("PREVIOUS RUN INCOMPLETE","bad");
-      log("LAST PHASE: "+x.phase,"bad");
-
-      if(x.popCount!==undefined)
-        log("POP COUNT: "+x.popCount,"bad");
-
-      if(x.blurCount!==undefined)
-        log("BLUR COUNT: "+x.blurCount,"bad");
-
-      log("****************************","bad");
-    }
-  }catch(e){}
-}
-
-function clearCheckpoint(){
-  localStorage.removeItem(KEY);
-  log("Checkpoint cleared.","warn");
-}
-
-function sleep(ms){
-  return new Promise(r=>setTimeout(r,ms));
-}
-
-async function waitComplete(){
-
-  if(document.readyState==="complete")
-    return;
-
-  await new Promise(resolve=>{
-    addEventListener("load",resolve,{once:true});
-  });
-}
-
-/*
- * V14 intentionally exercises only the
- * history/focus/popstate lifetime sequence.
- *
- * It DOES NOT:
- *   - free allocator neighbours
- *   - reclaim an SSV
- *   - spray matching ArrayBuffers
- *   - inspect corrupted memory
- *   - modify SSV fields
- *   - construct read/write primitives
- */
-
-async function run(){
-
-  logBox.innerHTML="";
-
-  previous();
-
-  popCount=0;
-  blurCount=0;
-  focusCount=0;
-
-  log("V14 START","info");
-  log(navigator.userAgent);
-  log("");
-
-  try {
-
-    cp("WAIT_DOCUMENT_COMPLETE");
-
-    await waitComplete();
-
-    log("Document complete","ok");
-
-    /*
-       PSFree performs an initial history operation
-       before creating the interesting entries.
-    */
-
-    cp("INITIAL_REPLACE_STATE");
-
-    history.replaceState(
-      "v14-state0",
-      "",
-      location.pathname
-    );
-
-    /*
-       Create two same-document history entries.
-
-       These cause WebKit to serialize the state
-       values internally.
-    */
-
-    cp("PUSH_STATE_BAR");
-
-    history.pushState(
-      "v14-state1",
-      "",
-      location.pathname+"#v14bar"
-    );
-
-    cp("PUSH_STATE_FOO");
-
-    history.pushState(
-      "v14-state1b",
-      "",
-      location.pathname+"#v14foo"
-    );
-
-    cp("PUSH_STATE_FINAL");
-
-    history.pushState(
-      "v14-state2",
-      "",
-      location.pathname+"#v14final"
-    );
-
-    log("History states created","ok");
-
-    /*
-       Construct the focus targets.
-    */
-
-    cp("CREATE_FOCUS_TARGETS");
-
-    const input=document.createElement("input");
-    const foo=document.createElement("input");
-    const bar=document.createElement("a");
-
-    input.id="v14input";
-    foo.id="v14foo";
-    bar.id="v14bar";
-
-    foo.value="foo";
-    input.value="input";
-
-    bar.href="#v14bar";
-    bar.textContent="bar";
-
-    document.body.appendChild(input);
-    document.body.appendChild(foo);
-    document.body.appendChild(bar);
-
-    input.addEventListener("focus",()=>{
-      focusCount++;
-
-      cp("INPUT_FOCUS",{
-        focusCount,
-        blurCount,
-        popCount
-      });
-
-      log("input focus","info");
-    });
-
-    input.addEventListener("blur",()=>{
-
-      blurCount++;
-
-      cp("INPUT_BLUR",{
-        focusCount,
-        blurCount,
-        popCount
-      });
-
-      log(
-        "input blur #"+blurCount,
-        "info"
-      );
-
-      /*
-       Important boundary:
-
-       The real exploit performs allocator manipulation
-       and ArrayBuffer reclamation around this point.
-
-       V14 deliberately does NONE of that.
-      */
-    });
-
-    foo.addEventListener("focus",()=>{
-
-      focusCount++;
-
-      cp("FOO_FOCUS",{
-        focusCount,
-        blurCount,
-        popCount
-      });
-
-      log("foo focus","info");
-    });
-
-    foo.addEventListener("blur",()=>{
-
-      blurCount++;
-
-      cp("FOO_BLUR",{
-        focusCount,
-        blurCount,
-        popCount
-      });
-
-      log(
-        "foo blur #"+blurCount,
-        "info"
-      );
-    });
-
-    /*
-       Observe the two history transitions.
-    */
-
-    const twoPops=new Promise((resolve,reject)=>{
-
-      const timer=setTimeout(()=>{
-        reject(
-          new Error(
-            "Timed out waiting for popstate"
-          )
+function showPrevious() {
+    try {
+        const cp = JSON.parse(
+            localStorage.getItem(KEY)
         );
-      },10000);
 
-      function handler(event){
+        if (cp && cp.state === "RUNNING") {
+            log(
+                "PREVIOUS RUN DID NOT COMPLETE",
+                "bad"
+            );
 
-        popCount++;
+            log(
+                "LAST CHECKPOINT: " + cp.phase,
+                "bad"
+            );
 
-        cp("POPSTATE_"+popCount,{
-          focusCount,
-          blurCount,
-          popCount
-        });
+            log(
+                "Do not immediately rerun it.",
+                "warn"
+            );
+        }
+    } catch(e) {}
+}
+
+async function runV15() {
+
+    box.innerHTML = "";
+
+    showPrevious();
+
+    log("V15 START", "info");
+    log(navigator.userAgent);
+    log("");
+
+    try {
+
+        /*
+         * Historical WebKit SerializedScriptValue
+         * regression concept.
+         *
+         * Based on:
+         *
+         * fast/history/replacestate-nocrash.html
+         *
+         * No heap spray.
+         * No memory inspection.
+         * No arbitrary R/W.
+         */
+
+        checkpoint("INSTALL_SETTER");
+
+        let callbackCount = 0;
+
+        Object.prototype.__defineSetter__(
+            "foo",
+            function() {
+
+                callbackCount++;
+
+                checkpoint(
+                    "SETTER_CALLBACK_" +
+                    callbackCount
+                );
+
+                history.replaceState(
+                    "",
+                    ""
+                );
+            }
+        );
 
         log(
-          "popstate #"+popCount+
-          " state="+String(event.state),
-          "info"
+            "Setter installed",
+            "ok"
         );
 
-        if(popCount===1){
+        checkpoint("CREATE_STATE");
 
-          cp("SECOND_HISTORY_BACK",{
-            focusCount,
-            blurCount,
-            popCount
-          });
+        /*
+         * Keep this deliberately modest.
+         *
+         * The historical testcase used a large
+         * string. We're reproducing the control
+         * flow rather than attempting allocator
+         * manipulation.
+         */
 
-          history.back();
+        const state = {
+            foo: 1,
+            zzz: "A".repeat(1024 * 1024)
+        };
 
-        } else if(popCount===2){
+        log(
+            "State object created",
+            "ok"
+        );
 
-          clearTimeout(timer);
+        checkpoint(
+            "FIRST_REPLACE_STATE"
+        );
 
-          removeEventListener(
-            "popstate",
-            handler
-          );
+        history.replaceState(
+            state,
+            "",
+            location.pathname + "#v15"
+        );
 
-          resolve();
-        }
-      }
+        log(
+            "replaceState returned",
+            "ok"
+        );
 
-      addEventListener(
-        "popstate",
-        handler
-      );
-    });
+        checkpoint(
+            "READ_HISTORY_STATE"
+        );
 
-    /*
-       Focus is significant in the original
-       testcase because same-document navigation
-       interacts with focus/blur processing.
-    */
+        const returned =
+            history.state;
 
-    cp("FOCUS_INPUT");
+        log(
+            "history.state returned",
+            "ok"
+        );
 
-    input.focus();
+        checkpoint(
+            "PROPERTY_ACCESS"
+        );
 
-    await sleep(0);
+        /*
+         * Exercise the returned structured-clone
+         * value normally.
+         */
 
-    cp("FIRST_HISTORY_BACK",{
-      focusCount,
-      blurCount,
-      popCount
-    });
+        const foo =
+            returned ?
+            returned.foo :
+            undefined;
 
-    log("Calling history.back()","warn");
+        const len =
+            returned &&
+            returned.zzz ?
+            returned.zzz.length :
+            -1;
 
-    history.back();
+        checkpoint(
+            "VERIFY_RESULT"
+        );
 
-    await twoPops;
+        log(
+            "foo = " + foo
+        );
 
-    cp("POST_POPSTATE",{
-      focusCount,
-      blurCount,
-      popCount
-    });
+        log(
+            "zzz.length = " + len
+        );
 
-    log("");
-    log("History sequence completed","ok");
+        log(
+            "setter callbacks = " +
+            callbackCount
+        );
 
-    /*
-       Exercise the retained JS event/state values,
-       but don't inspect native memory.
-    */
+        /*
+         * Cleanup the prototype modification.
+         */
 
-    await sleep(0);
+        checkpoint("CLEANUP");
 
-    cp("CLEANUP",{
-      focusCount,
-      blurCount,
-      popCount
-    });
+        delete Object.prototype.foo;
 
-    input.remove();
-    foo.remove();
-    bar.remove();
+        history.replaceState(
+            null,
+            "",
+            location.pathname
+        );
 
-    history.replaceState(
-      "v14-clean",
-      "",
-      location.pathname
-    );
+        complete();
 
-    done();
+        log("");
+        log(
+            "====== V15 RESULT ======",
+            "info"
+        );
 
-    log("");
-    log("====== V14 RESULT ======","info");
-    log("STATUS: NORMAL","ok");
-    log("FOCUS EVENTS: "+focusCount);
-    log("BLUR EVENTS:  "+blurCount);
-    log("POP EVENTS:   "+popCount);
-    log("========================","info");
+        log(
+            "STATUS: NORMAL",
+            "ok"
+        );
 
-  } catch(e){
+        log(
+            "CALLBACKS: " +
+            callbackCount
+        );
 
-    cp("JS_EXCEPTION",{
-      message:String(e),
-      focusCount,
-      blurCount,
-      popCount
-    });
+        log(
+            "========================",
+            "info"
+        );
 
-    log("");
-    log("V14 EXCEPTION","bad");
-    log(String(e),"bad");
-  }
+    } catch(e) {
+
+        checkpoint(
+            "JS_EXCEPTION: " +
+            String(e)
+        );
+
+        log("");
+        log(
+            "V15 JS EXCEPTION",
+            "bad"
+        );
+
+        log(
+            String(e),
+            "bad"
+        );
+
+        /*
+         * Try to restore Object.prototype.
+         */
+
+        try {
+            delete Object.prototype.foo;
+        } catch(x) {}
+    }
 }
 
-previous();
+showPrevious();
 
 </script>
+
 </body>
 </html>
