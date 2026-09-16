@@ -1,38 +1,47 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V9 Regression Hunter</title>
+<title>PS5 WebKit 13.60 V10 FontFace Probe</title>
 
 <style>
 body{
-  background:#101827;color:#eee;
-  font:16px monospace;padding:18px
+  background:#101827;
+  color:#eee;
+  font:16px monospace;
+  padding:18px
 }
 button,select{
-  font:16px monospace;padding:9px;margin:4px
+  font:16px monospace;
+  padding:9px;
+  margin:4px
 }
 #log{
-  background:#17233a;padding:14px;
-  white-space:pre-wrap;margin-top:10px
+  background:#17233a;
+  padding:14px;
+  margin-top:10px;
+  white-space:pre-wrap
 }
 .ok{color:#59ff7a}
 .bad{color:#ff6868}
 .warn{color:#ffd166}
 .info{color:#63caff}
-#sandbox{position:absolute;left:-20000px;top:0}
+#sandbox{
+  position:absolute;
+  left:-20000px;
+  top:0
+}
 </style>
 
-<h2>PS5 WebKit 13.60 V9 Regression Hunter</h2>
+<h2>PS5 WebKit 13.60 — V10 FontFace Probe</h2>
 
-Runs/test:
 <select id="runs">
- <option value="10">10</option>
- <option value="100" selected>100</option>
- <option value="500">500</option>
+<option value="10">10 runs</option>
+<option value="100" selected>100 runs</option>
+<option value="500">500 runs</option>
 </select>
 
-<button onclick="runAll()">RUN ALL</button>
+<button onclick="start()">RUN</button>
+<button onclick="stopRun()">STOP</button>
 <button onclick="replay()">REPLAY CHECKPOINT</button>
-<button onclick="stop()">STOP</button>
 <button onclick="clearLog()">CLEAR</button>
 
 <div id="sandbox"></div>
@@ -41,7 +50,7 @@ Runs/test:
 <script>
 "use strict";
 
-const out=document.getElementById("log");
+const output=document.getElementById("log");
 const sandbox=document.getElementById("sandbox");
 
 let stopping=false;
@@ -50,455 +59,482 @@ let stats={
   pass:0,
   fail:0,
   exceptions:0,
-  timeout:0
+  unsupported:0
 };
 
 function log(s,c=""){
-  const d=document.createElement("div");
-  d.textContent=s;
-  d.className=c;
-  out.appendChild(d);
+  const e=document.createElement("div");
+  e.textContent=s;
+  e.className=c;
+  output.appendChild(e);
   window.scrollTo(0,document.body.scrollHeight);
 }
 
-function clearLog(){ out.innerHTML=""; }
+function clearLog(){
+  output.innerHTML="";
+}
 
-function stop(){
+function stopRun(){
   stopping=true;
   log("STOP REQUESTED","warn");
 }
 
-/* ===============================
-   Persistent crash checkpoint
-================================ */
+/* -----------------------------
+   Persistent checkpoint
+------------------------------ */
 
-function cp(test,iteration,phase,state="RUNNING"){
+function checkpoint(test,i,phase,state="RUNNING"){
+
   try{
-    localStorage.setItem("v9cp",JSON.stringify({
-      test:test,
-      iteration:iteration,
-      phase:phase,
-      state:state,
-      time:Date.now()
-    }));
+
+    localStorage.setItem(
+      "v10-checkpoint",
+      JSON.stringify({
+        test:test,
+        iteration:i,
+        phase:phase,
+        state:state,
+        time:Date.now()
+      })
+    );
+
   }catch(e){}
 }
 
-function readCP(){
+function readCheckpoint(){
+
   try{
-    const x=localStorage.getItem("v9cp");
-    return x ? JSON.parse(x) : null;
+
+    const x=
+      localStorage.getItem(
+        "v10-checkpoint"
+      );
+
+    return x ?
+      JSON.parse(x) :
+      null;
+
   }catch(e){
+
     return null;
   }
 }
 
 function previous(){
-  const c=readCP();
+
+  const c=readCheckpoint();
 
   if(c && c.state==="RUNNING"){
-    log("================================","bad");
-    log("PREVIOUS EXECUTION INCOMPLETE","bad");
+
+    log(
+      "================================",
+      "bad"
+    );
+
+    log(
+      "PREVIOUS EXECUTION INCOMPLETE",
+      "bad"
+    );
+
     log("TEST: "+c.test,"bad");
     log("ITERATION: "+c.iteration,"bad");
     log("PHASE: "+c.phase,"bad");
-    log("================================","bad");
+
+    log(
+      "================================",
+      "bad"
+    );
   }
 }
 
-/* ===============================
-   1. IFRAME DOCUMENT RETENTION
-================================ */
+/* -----------------------------
+   Capability report
+------------------------------ */
 
-async function frameRetention(i){
+function capabilities(){
 
-  cp("frameRetention",i,"create-frame");
+  log("CAPABILITY CHECK","info");
 
-  const f=document.createElement("iframe");
-  f.src="about:blank";
-  sandbox.appendChild(f);
-
-  await new Promise(r=>setTimeout(r,0));
-
-  const doc=f.contentDocument;
-
-  if(!doc){
-    f.remove();
-    return false;
-  }
-
-  cp("frameRetention",i,"build-old-document");
-
-  const holder=doc.createElement("div");
-
-  for(let n=0;n<30;n++){
-    const x=doc.createElement("span");
-    x.textContent=n;
-    holder.appendChild(x);
-  }
-
-  doc.body.appendChild(holder);
-
-  const retained=holder.children[15];
-
-  cp("frameRetention",i,"remove-frame");
-
-  f.remove();
-
-  cp("frameRetention",i,"mutate-retained-node");
-
-  retained.textContent="retained-"+i;
-  retained.setAttribute("data-v9",String(i));
-
-  return (
-    retained.textContent==="retained-"+i &&
-    retained.getAttribute("data-v9")===String(i)
-  );
-}
-
-/* ===============================
-   2. FRAME DOCUMENT REPLACEMENT
-================================ */
-
-async function documentReplacement(i){
-
-  cp("documentReplacement",i,"frame");
-
-  const f=document.createElement("iframe");
-  sandbox.appendChild(f);
-
-  await new Promise(r=>setTimeout(r,0));
-
-  const oldDoc=f.contentDocument;
-
-  if(!oldDoc){
-    f.remove();
-    return false;
-  }
-
-  const oldNode=oldDoc.createElement("div");
-  oldNode.textContent="old";
-  oldDoc.body.appendChild(oldNode);
-
-  cp("documentReplacement",i,"document-open");
-
-  oldDoc.open();
-
-  cp("documentReplacement",i,"document-write");
-
-  oldDoc.write(
-    "<!doctype html><body>"+
-    "<div id='new'>new-"+i+"</div>"
+  log(
+    "FontFace: "+
+    (typeof FontFace)
   );
 
-  cp("documentReplacement",i,"document-close");
-
-  oldDoc.close();
-
-  cp("documentReplacement",i,"old-wrapper");
-
-  oldNode.textContent="still-alive-"+i;
-
-  const ok=
-    oldNode.textContent==="still-alive-"+i;
-
-  f.remove();
-
-  return ok;
-}
-
-/* ===============================
-   3. RANGE + TREE DESTRUCTION
-================================ */
-
-async function rangeDestroy(i){
-
-  cp("rangeDestroy",i,"build");
-
-  const root=document.createElement("div");
-
-  root.innerHTML=
-    "<section>"+
-      "<div><span>ABCDEFGHIJ</span></div>"+
-      "<div><b>KLMNOPQRST</b></div>"+
-      "<div><em>UVWXYZ</em></div>"+
-    "</section>";
-
-  sandbox.appendChild(root);
-
-  const a=root.querySelector("span").firstChild;
-  const b=root.querySelector("em").firstChild;
-
-  const r=document.createRange();
-
-  cp("rangeDestroy",i,"set-range");
-
-  r.setStart(a,2);
-  r.setEnd(b,4);
-
-  cp("rangeDestroy",i,"extract");
-
-  const frag=r.extractContents();
-
-  cp("rangeDestroy",i,"destroy-original");
-
-  root.textContent="replacement-"+i;
-
-  cp("rangeDestroy",i,"inspect-fragment");
-
-  const ok=
-    frag.nodeType===Node.DOCUMENT_FRAGMENT_NODE;
-
-  root.remove();
-
-  return ok;
-}
-
-/* ===============================
-   4. EVENT LISTENER DESTROYS TREE
-================================ */
-
-async function listenerDestroy(i){
-
-  cp("listenerDestroy",i,"build");
-
-  const outer=document.createElement("div");
-  const inner=document.createElement("div");
-  const child=document.createElement("button");
-
-  outer.appendChild(inner);
-  inner.appendChild(child);
-  sandbox.appendChild(outer);
-
-  let called=0;
-
-  function h(){
-    called++;
-
-    cp("listenerDestroy",i,"inside-listener");
-
-    outer.remove();
-
-    inner.textContent="detached-"+i;
-
-    child.removeEventListener("v9",h);
-  }
-
-  child.addEventListener("v9",h);
-
-  cp("listenerDestroy",i,"dispatch");
-
-  child.dispatchEvent(new Event("v9",{
-    bubbles:true
-  }));
-
-  cp("listenerDestroy",i,"after-dispatch");
-
-  return (
-    called===1 &&
-    inner.textContent==="detached-"+i
+  log(
+    "document.fonts: "+
+    (document.fonts ?
+      "available":"missing")
   );
-}
 
-/* ===============================
-   5. MUTATION OBSERVER RE-ENTRY
-================================ */
+  if(document.fonts){
 
-async function observerReentry(i){
+    log(
+      "FontFaceSet.add: "+
+      typeof document.fonts.add
+    );
 
-  return new Promise(resolve=>{
+    log(
+      "FontFaceSet.delete: "+
+      typeof document.fonts.delete
+    );
 
-    cp("observerReentry",i,"build");
+    log(
+      "FontFaceSet.check: "+
+      typeof document.fonts.check
+    );
 
-    const root=document.createElement("div");
-    sandbox.appendChild(root);
-
-    let callbacks=0;
-    let done=false;
-
-    const observer=new MutationObserver(function(){
-
-      callbacks++;
-
-      cp(
-        "observerReentry",
-        i,
-        "observer-callback"
-      );
-
-      observer.disconnect();
-
-      while(root.firstChild)
-        root.removeChild(root.firstChild);
-
-      root.textContent="observer-"+i;
-
-      Promise.resolve().then(function(){
-
-        if(done) return;
-        done=true;
-
-        const ok=
-          callbacks===1 &&
-          root.textContent==="observer-"+i;
-
-        root.remove();
-        resolve(ok);
-      });
-    });
-
-    observer.observe(root,{
-      childList:true,
-      subtree:true
-    });
-
-    cp("observerReentry",i,"trigger");
-
-    const x=document.createElement("span");
-    x.textContent="trigger";
-    root.appendChild(x);
-
-    setTimeout(function(){
-      if(done) return;
-
-      done=true;
-      observer.disconnect();
-      root.remove();
-
-      resolve("timeout");
-    },500);
-  });
-}
-
-/* ===============================
-   6. ADOPT NODE BETWEEN DOCUMENTS
-================================ */
-
-async function adoptNodeTest(i){
-
-  cp("adoptNode",i,"frames");
-
-  const a=document.createElement("iframe");
-  const b=document.createElement("iframe");
-
-  sandbox.appendChild(a);
-  sandbox.appendChild(b);
-
-  await new Promise(r=>setTimeout(r,0));
-
-  const da=a.contentDocument;
-  const db=b.contentDocument;
-
-  if(!da || !db){
-    a.remove();
-    b.remove();
-    return false;
+    log(
+      "FontFaceSet.load: "+
+      typeof document.fonts.load
+    );
   }
 
-  const node=da.createElement("div");
-  node.innerHTML="<span>adopt-"+i+"</span>";
-  da.body.appendChild(node);
-
-  cp("adoptNode",i,"adopt");
-
-  const adopted=db.adoptNode(node);
-
-  cp("adoptNode",i,"append-new-document");
-
-  db.body.appendChild(adopted);
-
-  cp("adoptNode",i,"destroy-source-frame");
-
-  a.remove();
-
-  cp("adoptNode",i,"mutate");
-
-  adopted.setAttribute("data-v9","yes");
-
-  const ok=
-    adopted.ownerDocument===db &&
-    adopted.getAttribute("data-v9")==="yes";
-
-  b.remove();
-
-  return ok;
+  log("");
 }
 
-/* ===============================
-   7. COMMENT REMOVE REGRESSION
+/* =============================
+   TEST 1
+   FontFace construction
+============================= */
 
-   Mirrors ordinary remove()
-   semantics tested upstream.
-================================ */
+async function constructFace(i){
 
-async function repeatedRemove(i){
+  checkpoint(
+    "constructFace",
+    i,
+    "construct"
+  );
 
-  cp("repeatedRemove",i,"create");
+  const name=
+    "V10Construct"+i;
 
-  const root=document.createElement("div");
-  const comment=document.createComment("v9-"+i);
+  const f=
+    new FontFace(
+      name,
+      "local(Arial)"
+    );
 
-  root.appendChild(comment);
-  sandbox.appendChild(root);
+  checkpoint(
+    "constructFace",
+    i,
+    "properties"
+  );
 
-  cp("repeatedRemove",i,"remove-1");
+  f.style="normal";
+  f.weight="400";
+  f.stretch="normal";
 
-  comment.remove();
-
-  cp("repeatedRemove",i,"remove-2");
-
-  comment.remove();
-
-  cp("repeatedRemove",i,"remove-3");
-
-  comment.remove();
-
-  const ok=root.childNodes.length===0;
-
-  root.remove();
-
-  return ok;
+  return f.family===name;
 }
 
-/* ===============================
+/* =============================
+   TEST 2
+   Add / remove lifecycle
+============================= */
+
+async function addRemove(i){
+
+  checkpoint(
+    "addRemove",
+    i,
+    "construct"
+  );
+
+  const name=
+    "V10AddRemove"+i;
+
+  const f=
+    new FontFace(
+      name,
+      "local(Arial)"
+    );
+
+  checkpoint(
+    "addRemove",
+    i,
+    "add"
+  );
+
+  document.fonts.add(f);
+
+  checkpoint(
+    "addRemove",
+    i,
+    "check"
+  );
+
+  document.fonts.check(
+    "16px "+name
+  );
+
+  checkpoint(
+    "addRemove",
+    i,
+    "delete"
+  );
+
+  document.fonts.delete(f);
+
+  return true;
+}
+
+/* =============================
+   TEST 3
+   FontFace property churn
+============================= */
+
+async function propertyChurn(i){
+
+  checkpoint(
+    "propertyChurn",
+    i,
+    "construct"
+  );
+
+  const f=
+    new FontFace(
+      "V10Properties"+i,
+      "local(Arial)"
+    );
+
+  checkpoint(
+    "propertyChurn",
+    i,
+    "properties"
+  );
+
+  for(let n=0;n<50;n++){
+
+    f.style=
+      (n&1) ?
+      "italic":"normal";
+
+    f.weight=
+      (n&1) ?
+      "700":"400";
+
+    f.stretch=
+      (n&1) ?
+      "condensed":"normal";
+  }
+
+  return true;
+}
+
+/* =============================
+   TEST 4
+   CSS rule lifecycle
+============================= */
+
+async function cssRuleLifecycle(i){
+
+  checkpoint(
+    "cssRuleLifecycle",
+    i,
+    "style-create"
+  );
+
+  const style=
+    document.createElement("style");
+
+  const name=
+    "V10Rule"+i;
+
+  style.textContent=
+    "@font-face{"+
+    "font-family:'"+name+"';"+
+    "src:local(Arial);"+
+    "}";
+
+  checkpoint(
+    "cssRuleLifecycle",
+    i,
+    "style-append"
+  );
+
+  document.head.appendChild(style);
+
+  const element=
+    document.createElement("span");
+
+  element.textContent=
+    "FontFace regression "+i;
+
+  element.style.fontFamily=
+    "'"+name+"'";
+
+  sandbox.appendChild(element);
+
+  checkpoint(
+    "cssRuleLifecycle",
+    i,
+    "layout"
+  );
+
+  void element.offsetWidth;
+
+  checkpoint(
+    "cssRuleLifecycle",
+    i,
+    "remove-style"
+  );
+
+  style.remove();
+
+  checkpoint(
+    "cssRuleLifecycle",
+    i,
+    "layout-after-remove"
+  );
+
+  void element.offsetWidth;
+
+  element.remove();
+
+  return true;
+}
+
+/* =============================
+   TEST 5
+   Document/font lifetime
+============================= */
+
+async function frameFontLifetime(i){
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "frame-create"
+  );
+
+  const frame=
+    document.createElement("iframe");
+
+  sandbox.appendChild(frame);
+
+  await new Promise(
+    r=>setTimeout(r,0)
+  );
+
+  const doc=
+    frame.contentDocument;
+
+  if(!doc)
+    return false;
+
+  if(typeof doc.defaultView.FontFace
+     !=="function"){
+
+    frame.remove();
+    return "unsupported";
+  }
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "face-create"
+  );
+
+  const Face=
+    doc.defaultView.FontFace;
+
+  const face=
+    new Face(
+      "V10Frame"+i,
+      "local(Arial)"
+    );
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "font-add"
+  );
+
+  doc.fonts.add(face);
+
+  const element=
+    doc.createElement("span");
+
+  element.textContent="frame font";
+  element.style.fontFamily=
+    "V10Frame"+i;
+
+  doc.body.appendChild(element);
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "layout"
+  );
+
+  void element.offsetWidth;
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "remove-frame"
+  );
+
+  frame.remove();
+
+  checkpoint(
+    "frameFontLifetime",
+    i,
+    "retained-face"
+  );
+
+  /*
+    Harmless inspection of the retained
+    JS wrapper after document teardown.
+  */
+
+  const family=face.family;
+
+  return typeof family==="string";
+}
+
+/* =============================
    TEST TABLE
-================================ */
+============================= */
 
 const tests=[
- ["frameRetention",frameRetention],
- ["documentReplacement",documentReplacement],
- ["rangeDestroy",rangeDestroy],
- ["listenerDestroy",listenerDestroy],
- ["observerReentry",observerReentry],
- ["adoptNode",adoptNodeTest],
- ["repeatedRemove",repeatedRemove]
+  ["constructFace",constructFace],
+  ["addRemove",addRemove],
+  ["propertyChurn",propertyChurn],
+  ["cssRuleLifecycle",cssRuleLifecycle],
+  ["frameFontLifetime",frameFontLifetime]
 ];
 
 async function execute(name,fn,i){
 
-  cp(name,i,"BEGIN");
+  checkpoint(name,i,"BEGIN");
 
   try{
 
-    const result=await fn(i);
+    const result=
+      await fn(i);
 
-    if(result==="timeout"){
-      stats.timeout++;
+    if(result===true){
+
+      stats.pass++;
+
+    }else if(result==="unsupported"){
+
+      stats.unsupported++;
+
       log(
-        "[TIMEOUT] "+name+" #"+i,
+        "[UNSUPPORTED] "+
+        name+" #"+i,
         "warn"
       );
-    }
 
-    else if(result===true){
-      stats.pass++;
-    }
+    }else{
 
-    else{
       stats.fail++;
 
       log(
-        "[FAIL] "+name+" #"+i,
+        "[FAIL] "+
+        name+" #"+i,
         "bad"
       );
 
@@ -511,17 +547,23 @@ async function execute(name,fn,i){
 
     log(
       "[EXCEPTION] "+
-      name+" #"+i+" :: "+e,
+      name+" #"+i+
+      " :: "+e,
       "bad"
     );
 
     stopping=true;
   }
 
-  cp(name,i,"COMPLETE","COMPLETE");
+  checkpoint(
+    name,
+    i,
+    "COMPLETE",
+    "COMPLETE"
+  );
 }
 
-async function runAll(){
+async function start(){
 
   clearLog();
   previous();
@@ -532,34 +574,66 @@ async function runAll(){
     pass:0,
     fail:0,
     exceptions:0,
-    timeout:0
+    unsupported:0
   };
 
-  const runs=
-    Number(document.getElementById("runs").value);
+  capabilities();
 
-  log("V9 REGRESSION HUNTER","info");
-  log("UA: "+navigator.userAgent);
-  log("Tests: "+tests.length);
-  log("Runs/test: "+runs);
+  if(typeof FontFace!=="function"){
+
+    log(
+      "FontFace unavailable — stopping.",
+      "warn"
+    );
+
+    return;
+  }
+
+  const runs=
+    Number(
+      document.getElementById(
+        "runs"
+      ).value
+    );
+
+  log(
+    "V10 FONTFACE REGRESSION PROBE",
+    "info"
+  );
+
+  log(
+    "UA: "+navigator.userAgent
+  );
+
+  log(
+    "Runs/test: "+runs
+  );
+
   log("");
 
-  const begin=performance.now();
+  const begin=
+    performance.now();
 
-  for(const entry of tests){
+  for(const [name,fn] of tests){
 
-    if(stopping) break;
+    if(stopping)
+      break;
 
-    const name=entry[0];
-    const fn=entry[1];
-
-    log(">>> "+name,"info");
+    log(
+      ">>> "+name,
+      "info"
+    );
 
     for(let i=0;i<runs;i++){
 
-      if(stopping) break;
+      if(stopping)
+        break;
 
-      await execute(name,fn,i);
+      await execute(
+        name,
+        fn,
+        i
+      );
 
       if(i%10===0){
 
@@ -579,71 +653,108 @@ async function runAll(){
     performance.now()-begin;
 
   log("");
-  log("======= V9 RESULT =======","info");
-  log("PASS:       "+stats.pass,"ok");
-  log(
-    "FAIL:       "+stats.fail,
-    stats.fail?"bad":"ok"
-  );
-  log(
-    "EXCEPTIONS: "+stats.exceptions,
-    stats.exceptions?"bad":"ok"
-  );
-  log(
-    "TIMEOUT:    "+stats.timeout,
-    stats.timeout?"warn":"ok"
-  );
-  log(
-    "RUNTIME:    "+
-    elapsed.toFixed(0)+" ms"
-  );
-  log("=========================","info");
-}
 
-/* ===============================
-   REPLAY CHECKPOINT
-================================ */
+  log(
+    "======= V10 RESULT =======",
+    "info"
+  );
+
+  log(
+    "PASS:        "+
+    stats.pass,
+    "ok"
+  );
+
+  log(
+    "FAIL:        "+
+    stats.fail,
+    stats.fail ?
+      "bad":"ok"
+  );
+
+  log(
+    "EXCEPTIONS:  "+
+    stats.exceptions,
+    stats.exceptions ?
+      "bad":"ok"
+  );
+
+  log(
+    "UNSUPPORTED: "+
+    stats.unsupported,
+    stats.unsupported ?
+      "warn":"ok"
+  );
+
+  log(
+    "RUNTIME:     "+
+    elapsed.toFixed(0)+
+    " ms"
+  );
+
+  log(
+    "==========================",
+    "info"
+  );
+}
 
 async function replay(){
 
   clearLog();
 
-  const c=readCP();
+  const c=
+    readCheckpoint();
 
   if(!c){
-    log("No checkpoint available","warn");
+
+    log(
+      "No checkpoint available.",
+      "warn"
+    );
+
     return;
   }
 
   const entry=
-    tests.find(x=>x[0]===c.test);
+    tests.find(
+      x=>x[0]===c.test
+    );
 
   if(!entry){
-    log("Checkpoint test unavailable","bad");
+
+    log(
+      "Checkpoint testcase unavailable.",
+      "bad"
+    );
+
     return;
   }
 
-  log("CHECKPOINT REPLAY","warn");
-  log("Test: "+c.test);
-  log("Iteration: "+c.iteration);
-  log("Last phase: "+c.phase);
-  log("");
+  log(
+    "REPLAYING CHECKPOINT",
+    "warn"
+  );
+
+  log(
+    "Test: "+c.test
+  );
+
+  log(
+    "Iteration: "+
+    c.iteration
+  );
+
+  log(
+    "Last phase: "+
+    c.phase
+  );
 
   stopping=false;
 
-  /*
-    Replay the selected testcase up through
-    the iteration where execution stopped.
-  */
-
   for(let i=0;i<=c.iteration;i++){
 
-    if(stopping) break;
-
-    log(
-      "Replay "+
-      i+"/"+c.iteration
-    );
+    if(stopping)
+      break;
 
     await execute(
       entry[0],
@@ -656,12 +767,15 @@ async function replay(){
     );
   }
 
-  if(!stopping)
+  if(!stopping){
+
     log(
       "Replay completed normally.",
       "ok"
     );
+  }
 }
 
 previous();
+
 </script>
