@@ -1,54 +1,49 @@
 <!doctype html>
-<html>
-<head>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V4 Regression PoC</title>
+<title>PS5 WebKit 13.60 V5</title>
 
 <style>
 body {
     background:#101827;
     color:#eee;
     font:17px monospace;
-    padding:20px;
+    padding:20px
 }
 button,select {
     font:17px monospace;
-    padding:10px 14px;
-    margin:4px;
+    padding:10px;
+    margin:4px
 }
 #log {
     background:#17233a;
-    padding:16px;
-    margin-top:15px;
-    white-space:pre-wrap;
+    padding:15px;
+    white-space:pre-wrap
 }
-.ok { color:#59ff7a; }
-.bad { color:#ff6868; }
-.info { color:#63caff; }
-.warn { color:#ffd166; }
+.ok {color:#59ff7a}
+.bad {color:#ff6868}
+.info {color:#63caff}
+.warn {color:#ffd166}
 </style>
-</head>
 
-<body>
+<h2>PS5 WebKit 13.60 — V5 Regression Runner</h2>
 
-<h2>PS5 WebKit 13.60 — V4 Regression PoC</h2>
-
-<select id="case">
-<option value="all">All cases</option>
-<option value="dom">DOM lifetime</option>
-<option value="mutation">Callback mutation</option>
-<option value="iframe">Iframe teardown</option>
-<option value="worker">Worker / ArrayBuffer</option>
+<select id="test">
+<option value="dom">DOM detach</option>
+<option value="iframe">Document teardown</option>
+<option value="event">Event mutation</option>
+<option value="array">ArrayBuffer lifecycle</option>
+<option value="all">Run all</option>
 </select>
 
 <select id="runs">
-<option value="100">100</option>
-<option value="500" selected>500</option>
-<option value="2000">2000</option>
+<option>10</option>
+<option selected>100</option>
+<option>500</option>
+<option>2000</option>
 </select>
 
-<button onclick="start()">Run V4</button>
-<button onclick="requestStop()">Stop</button>
+<button onclick="start()">Run</button>
+<button onclick="stopRun()">Stop</button>
 <button onclick="clearLog()">Clear</button>
 
 <div id="log"></div>
@@ -56,238 +51,127 @@ button,select {
 <script>
 "use strict";
 
-const box = document.getElementById("log");
+const box =
+    document.getElementById("log");
 
-let stopping = false;
+let stopped=false;
 
-let stats = {
-    tests:0,
-    pass:0,
-    fail:0,
-    anomaly:0,
-    iteration:0,
-    start:0
-};
+let stats;
 
-function log(text, cls="") {
-    const e = document.createElement("div");
-    e.textContent = text;
-    e.className = cls;
-    box.appendChild(e);
-    window.scrollTo(0,document.body.scrollHeight);
+function log(s,c="") {
+    const d=document.createElement("div");
+    d.textContent=s;
+    d.className=c;
+    box.appendChild(d);
 }
 
 function clearLog() {
     box.innerHTML="";
 }
 
-function requestStop() {
-    stopping=true;
+function stopRun() {
+    stopped=true;
     log("STOP requested","warn");
 }
 
-function checkpoint(test,iteration) {
+function saveCheckpoint(test,i,state) {
+
     try {
-        sessionStorage.setItem(
-            "webkit-v4-checkpoint",
+
+        localStorage.setItem(
+            "v5-last",
             JSON.stringify({
                 test:test,
-                iteration:iteration,
-                timestamp:Date.now()
+                iteration:i,
+                state:state,
+                time:Date.now()
             })
         );
+
     } catch(e) {}
 }
 
-function showPreviousCheckpoint() {
-    try {
-        const raw =
-            sessionStorage.getItem(
-                "webkit-v4-checkpoint"
-            );
+function previousCrashCandidate() {
 
-        if (!raw)
+    try {
+
+        const raw=
+            localStorage.getItem("v5-last");
+
+        if(!raw)
             return;
 
-        const c=JSON.parse(raw);
+        const x=JSON.parse(raw);
 
-        log(
-            "Previous checkpoint: "+
-            c.test+
-            " @ iteration "+
-            c.iteration,
-            "warn"
-        );
+        /*
+         If the previous page disappeared while
+         state was RUNNING, that particular test
+         didn't reach its completion checkpoint.
+        */
+
+        if(x.state==="RUNNING") {
+
+            log(
+                "Previous incomplete testcase:",
+                "warn"
+            );
+
+            log(
+                x.test+
+                " iteration "+
+                x.iteration,
+                "warn"
+            );
+        }
 
     } catch(e) {}
 }
 
-function record(ok,name) {
+/* =====================================
+   CASE A — detached DOM wrapper
+===================================== */
 
-    stats.tests++;
+async function testDOM(i) {
 
-    if(ok) {
-        stats.pass++;
-        return;
-    }
-
-    stats.fail++;
-
-    log(
-        "[FAIL] "+name,
-        "bad"
-    );
-}
-
-/*
- ========================================
- CASE 1
- DOM lifetime changes during callbacks
- ========================================
-*/
-
-async function domLifetime(iter) {
-
-    const parent =
+    const parent=
         document.createElement("div");
 
-    const victim =
-        document.createElement("div");
+    const child=
+        document.createElement("span");
 
-    parent.appendChild(victim);
+    child.textContent="before";
+
+    parent.appendChild(child);
     document.body.appendChild(parent);
 
-    let calls=0;
+    child.remove();
 
-    function callback() {
+    child.textContent=
+        "after-"+i;
 
-        calls++;
-
-        victim.remove();
-
-        /*
-         JS wrapper remains a valid JS
-         object even after DOM removal.
-        */
-
-        victim.setAttribute(
-            "data-after-remove",
-            String(iter)
-        );
-    }
-
-    victim.addEventListener(
-        "v4event",
-        callback
-    );
-
-    victim.dispatchEvent(
-        new Event("v4event")
-    );
-
-    victim.removeEventListener(
-        "v4event",
-        callback
-    );
+    const result=
+        child.textContent===
+        "after-"+i;
 
     parent.remove();
 
-    return (
-        calls===1 &&
-        victim.getAttribute(
-            "data-after-remove"
-        )===String(iter)
-    );
+    return result;
 }
 
-/*
- ========================================
- CASE 2
- Mutation while callback executes
- ========================================
-*/
+/* =====================================
+   CASE B — document teardown
+===================================== */
 
-async function mutationCase(iter) {
-
-    const root =
-        document.createElement("div");
-
-    document.body.appendChild(root);
-
-    const nodes=[];
-
-    for(let i=0;i<64;i++) {
-
-        const n=
-            document.createElement("span");
-
-        n.textContent=
-            iter+":"+i;
-
-        nodes.push(n);
-        root.appendChild(n);
-    }
-
-    let calls=0;
-
-    function mutate() {
-
-        calls++;
-
-        while(root.firstChild)
-            root.removeChild(
-                root.firstChild
-            );
-
-        for(let i=0;i<32;i++) {
-
-            const n=
-                document.createElement("i");
-
-            n.textContent=
-                "new-"+i;
-
-            root.appendChild(n);
-        }
-    }
-
-    root.addEventListener(
-        "v4mutation",
-        mutate
-    );
-
-    root.dispatchEvent(
-        new Event("v4mutation")
-    );
-
-    const good =
-        calls===1 &&
-        root.childNodes.length===32;
-
-    root.remove();
-
-    return good;
-}
-
-/*
- ========================================
- CASE 3
- Document / iframe teardown
- ========================================
-*/
-
-async function iframeCase(iter) {
+async function testIframe(i) {
 
     return new Promise(resolve=>{
 
         const frame=
-            document.createElement(
-                "iframe"
-            );
+            document.createElement("iframe");
 
         let finished=false;
 
-        const timer=setTimeout(()=>{
+        const timeout=setTimeout(()=>{
 
             if(finished)
                 return;
@@ -311,40 +195,29 @@ async function iframeCase(iter) {
                 const doc=
                     frame.contentDocument;
 
-                const element=
+                const node=
                     doc.createElement("div");
 
-                element.textContent=
-                    "iteration-"+iter;
+                node.textContent=
+                    "frame-"+i;
 
-                doc.body.appendChild(
-                    element
-                );
+                doc.body.appendChild(node);
 
                 frame.remove();
 
-                /*
-                 Retain JS references after
-                 document teardown and inspect
-                 ordinary JS-visible state.
-                */
-
-                const ok=
-                    element.textContent===
-                    "iteration-"+iter;
+                const result=
+                    node.textContent===
+                    "frame-"+i;
 
                 finished=true;
-                clearTimeout(timer);
+                clearTimeout(timeout);
 
-                resolve(ok);
+                resolve(result);
 
             } catch(e) {
 
                 finished=true;
-                clearTimeout(timer);
-
-                try { frame.remove(); }
-                catch(x) {}
+                clearTimeout(timeout);
 
                 resolve(false);
             }
@@ -352,228 +225,262 @@ async function iframeCase(iter) {
 
         frame.src="about:blank";
 
-        document.body.appendChild(
-            frame
-        );
+        document.body.appendChild(frame);
     });
 }
 
-/*
- ========================================
- CASE 4
- Worker / ArrayBuffer lifecycle
- ========================================
-*/
+/* =====================================
+   CASE C — mutation during event
+===================================== */
 
-async function workerCase(iter) {
+async function testEvent(i) {
 
-    return new Promise(resolve=>{
+    const root=
+        document.createElement("div");
 
-        if(typeof Worker==="undefined") {
-            resolve(true);
-            return;
-        }
+    document.body.appendChild(root);
 
-        const source=`
-        self.onmessage=function(e) {
-            const a=new Uint32Array(e.data);
+    for(let n=0;n<100;n++) {
 
-            const good=
-                a.length===64 &&
-                a[0]===e.data.byteLength;
+        const x=
+            document.createElement("span");
 
-            self.postMessage({
-                good:good,
-                first:a[0]
-            });
-        };
-        `;
+        x.textContent=String(n);
 
-        const blob=
-            new Blob(
-                [source],
-                {type:"text/javascript"}
-            );
+        root.appendChild(x);
+    }
 
-        const url=
-            URL.createObjectURL(blob);
+    let fired=0;
 
-        const worker=
-            new Worker(url);
+    function callback() {
 
-        const buffer=
-            new ArrayBuffer(256);
+        fired++;
 
-        const view=
-            new Uint32Array(buffer);
+        while(root.firstChild)
+            root.removeChild(root.firstChild);
 
-        view[0]=256;
+        const replacement=
+            document.createElement("div");
 
-        let finished=false;
+        replacement.textContent=
+            "replacement-"+i;
 
-        const timer=setTimeout(()=>{
+        root.appendChild(replacement);
+    }
 
-            if(finished)
-                return;
+    root.addEventListener(
+        "v5-event",
+        callback
+    );
 
-            finished=true;
+    root.dispatchEvent(
+        new Event("v5-event")
+    );
 
-            worker.terminate();
-            URL.revokeObjectURL(url);
+    root.removeEventListener(
+        "v5-event",
+        callback
+    );
 
-            resolve(false);
+    const result=
+        fired===1 &&
+        root.childNodes.length===1;
 
-        },1500);
+    root.remove();
 
-        worker.onmessage=function(e){
+    return result;
+}
 
-            if(finished)
-                return;
+/* =====================================
+   CASE D — ArrayBuffer lifecycle
+===================================== */
 
-            finished=true;
-            clearTimeout(timer);
+async function testArray(i) {
 
-            const ok=
-                e.data &&
-                e.data.good===true &&
-                e.data.first===256;
+    const buffer=
+        new ArrayBuffer(0x10000);
 
-            worker.terminate();
-            URL.revokeObjectURL(url);
+    const a=
+        new Uint32Array(buffer);
 
-            resolve(ok);
-        };
+    for(let n=0;n<a.length;n++) {
 
-        worker.onerror=function(){
+        a[n]=(
+            0x41410000 ^
+            n ^
+            i
+        )>>>0;
+    }
 
-            if(finished)
-                return;
+    for(let n=0;n<a.length;n++) {
 
-            finished=true;
-            clearTimeout(timer);
+        const expected=(
+            0x41410000 ^
+            n ^
+            i
+        )>>>0;
 
-            worker.terminate();
-            URL.revokeObjectURL(url);
+        if(a[n]!==expected)
+            return false;
+    }
 
-            resolve(false);
-        };
-
-        worker.postMessage(buffer);
-    });
+    return true;
 }
 
 const tests={
-    dom:domLifetime,
-    mutation:mutationCase,
-    iframe:iframeCase,
-    worker:workerCase
+    dom:testDOM,
+    iframe:testIframe,
+    event:testEvent,
+    array:testArray
 };
+
+async function execute(name,i) {
+
+    saveCheckpoint(
+        name,
+        i,
+        "RUNNING"
+    );
+
+    const start=
+        performance.now();
+
+    try {
+
+        const result=
+            await tests[name](i);
+
+        const elapsed=
+            performance.now()-start;
+
+        if(result!==true) {
+
+            stats.fail++;
+
+            log(
+                "[FAIL] "+
+                name+
+                " #"+
+                i,
+                "bad"
+            );
+
+            return;
+        }
+
+        /*
+         A very long execution isn't proof
+         of a security problem, but flag it
+         for reproduction.
+        */
+
+        if(elapsed>500) {
+
+            stats.slow++;
+
+            log(
+                "[SLOW] "+
+                name+
+                " #"+
+                i+
+                " "+
+                elapsed.toFixed(1)+
+                "ms",
+                "warn"
+            );
+        }
+
+        stats.pass++;
+
+    } catch(e) {
+
+        stats.exception++;
+
+        log(
+            "[EXCEPTION] "+
+            name+
+            " #"+
+            i+
+            " : "+
+            e,
+            "bad"
+        );
+    }
+
+    saveCheckpoint(
+        name,
+        i,
+        "COMPLETE"
+    );
+}
 
 async function start() {
 
     clearLog();
 
-    stopping=false;
+    previousCrashCandidate();
+
+    stopped=false;
 
     stats={
-        tests:0,
         pass:0,
         fail:0,
-        anomaly:0,
-        iteration:0,
-        start:performance.now()
+        exception:0,
+        slow:0
     };
 
-    showPreviousCheckpoint();
-
     const selected=
-        document.getElementById(
-            "case"
-        ).value;
+        document.getElementById("test").value;
 
-    const runs=
+    const iterations=
         Number(
-            document.getElementById(
-                "runs"
-            ).value
+            document.getElementById("runs").value
         );
 
-    const selectedTests=
+    const queue=
         selected==="all"
         ? Object.keys(tests)
         : [selected];
 
     log(
-        "PS5 WebKit V4 starting...",
+        "V5 starting",
         "info"
     );
 
     log(
-        "UA: "+navigator.userAgent
+        navigator.userAgent
     );
 
     log(
-        "Cases: "+
-        selectedTests.join(", ")
+        "Tests: "+
+        queue.join(", ")
     );
 
     log(
-        "Iterations: "+runs
+        "Iterations: "+
+        iterations
     );
 
-    log("");
+    for(let i=0;i<iterations;i++) {
 
-    for(let i=0;i<runs;i++) {
-
-        if(stopping)
+        if(stopped)
             break;
 
-        stats.iteration=i;
+        for(const name of queue) {
 
-        for(const name of selectedTests) {
-
-            if(stopping)
+            if(stopped)
                 break;
 
-            checkpoint(name,i);
-
-            try {
-
-                const ok=
-                    await tests[name](i);
-
-                record(
-                    ok===true,
-                    name+
-                    " iteration "+
-                    i
-                );
-
-            } catch(e) {
-
-                stats.tests++;
-                stats.fail++;
-                stats.anomaly++;
-
-                log(
-                    "[EXCEPTION] "+
-                    name+
-                    " iteration="+
-                    i+
-                    " :: "+
-                    e,
-                    "bad"
-                );
-            }
+            await execute(name,i);
         }
 
-        if((i%25)===0) {
+        if(i%25===0) {
 
             log(
                 "Iteration "+
                 i+
-                " / "+
-                runs,
+                "/"+
+                iterations,
                 "info"
             );
 
@@ -583,57 +490,42 @@ async function start() {
         }
     }
 
-    const runtime=
-        performance.now()-
-        stats.start;
-
     log("");
     log(
-        "========== V4 RESULT ==========",
+        "======= V5 RESULT =======",
         "info"
     );
 
-    log("Tests:     "+stats.tests);
-    log("Passed:    "+stats.pass,"ok");
-
     log(
-        "Failed:    "+stats.fail,
-        stats.fail ? "bad":"ok"
+        "PASS:       "+
+        stats.pass,
+        "ok"
     );
 
     log(
-        "Anomalies: "+stats.anomaly,
-        stats.anomaly ? "bad":"ok"
+        "FAIL:       "+
+        stats.fail,
+        stats.fail ?
+        "bad":"ok"
     );
 
     log(
-        "Last run:  "+
-        stats.iteration
+        "EXCEPTIONS: "+
+        stats.exception,
+        stats.exception ?
+        "bad":"ok"
     );
 
     log(
-        "Runtime:   "+
-        runtime.toFixed(2)+
-        " ms"
+        "SLOW:       "+
+        stats.slow,
+        stats.slow ?
+        "warn":"ok"
     );
 
-    if(
-        !stopping &&
-        stats.fail===0 &&
-        stats.anomaly===0
-    ) {
-        log(
-            "[PASS] Stable run",
-            "ok"
-        );
-    }
-
     log(
-        "===============================",
+        "=========================",
         "info"
     );
 }
-
 </script>
-</body>
-</html>
