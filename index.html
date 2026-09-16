@@ -2,58 +2,55 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 V17 SSV Callback Probe</title>
+<title>PS5 13.60 — V18 SSV Lifetime Probe</title>
 
 <style>
-body{
+body {
     background:#101827;
     color:#eee;
     font:16px monospace;
     padding:18px;
 }
-button{
+button {
     font:16px monospace;
     padding:10px;
     margin:5px;
 }
-#log{
+#log {
     background:#17233a;
     padding:14px;
     margin-top:12px;
     white-space:pre-wrap;
 }
-.ok{color:#59ff7a}
-.bad{color:#ff6868}
-.warn{color:#ffd166}
-.info{color:#63caff}
-
-.spacer{
-    height:1800px;
-}
+.ok { color:#59ff7a; }
+.bad { color:#ff6868; }
+.warn { color:#ffd166; }
+.info { color:#63caff; }
+.spacer { height:1800px; }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V17 SSV Callback Probe</h2>
+<h2>PS5 13.60 — V18 SSV Lifetime Probe</h2>
 
-<button onclick="runV17()">RUN V17</button>
+<button onclick="runV18()">RUN V18</button>
 <button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
 
 <div class="spacer"></div>
 
-<a id="foo" href="#foo">
-    V17 fragment target
+<a id="v18target" href="#v18target">
+    V18 fragment target
 </a>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V17_CP";
+const KEY = "PS5_V18_CP";
 
-const box =
+const logBox =
     document.getElementById("log");
 
 let seq = 0;
@@ -67,45 +64,45 @@ function log(text, cls="") {
     d.textContent = text;
     d.className = cls;
 
-    box.appendChild(d);
+    logBox.appendChild(d);
 }
 
-function checkpoint(name) {
+function cp(name, extra="") {
 
     seq++;
 
-    const e = {
-        n:seq,
-        name:name,
-        href:location.href,
-        time:performance.now()
+    const entry = {
+        n: seq,
+        name: name,
+        extra: extra,
+        href: location.href,
+        time: performance.now()
     };
 
-    events.push(e);
+    events.push(entry);
 
     try {
-
         localStorage.setItem(
             KEY,
             JSON.stringify({
                 state:"RUNNING",
-                last:e,
-                events:events.slice(-40)
+                last:entry,
+                events:events.slice(-50)
             })
         );
-
-    } catch(x) {}
+    } catch(e) {}
 
     log(
-        seq + ": " + name,
+        seq + ": " +
+        name +
+        (extra ? " — " + extra : ""),
         "info"
     );
 }
 
-function finished() {
+function complete() {
 
     try {
-
         localStorage.setItem(
             KEY,
             JSON.stringify({
@@ -113,8 +110,7 @@ function finished() {
                 events:events
             })
         );
-
-    } catch(x) {}
+    } catch(e) {}
 }
 
 function clearCP() {
@@ -127,20 +123,20 @@ function clearCP() {
     );
 }
 
-function showPrevious() {
+function previousRun() {
 
     try {
 
         const raw =
             localStorage.getItem(KEY);
 
-        if(!raw)
+        if (!raw)
             return;
 
-        const cp =
+        const data =
             JSON.parse(raw);
 
-        if(cp.state !== "RUNNING")
+        if (data.state !== "RUNNING")
             return;
 
         log(
@@ -153,13 +149,13 @@ function showPrevious() {
             "bad"
         );
 
-        if(cp.last) {
+        if (data.last) {
 
             log(
-                "LAST EVENT: " +
-                cp.last.n +
+                "LAST CHECKPOINT: " +
+                data.last.n +
                 " / " +
-                cp.last.name,
+                data.last.name,
                 "bad"
             );
         }
@@ -175,11 +171,20 @@ function showPrevious() {
 function sleep(ms) {
 
     return new Promise(
-        r => setTimeout(r,ms)
+        resolve => setTimeout(resolve, ms)
     );
 }
 
-function waitPop() {
+function describeState(state) {
+
+    try {
+        return JSON.stringify(state);
+    } catch(e) {
+        return "[unserializable]";
+    }
+}
+
+function waitForPop() {
 
     return new Promise(
         (resolve,reject) => {
@@ -201,9 +206,29 @@ function waitPop() {
 
                     clearTimeout(timer);
 
-                    checkpoint(
-                        "POPSTATE state=" +
-                        String(e.state)
+                    cp(
+                        "POPSTATE_ENTER",
+                        describeState(e.state)
+                    );
+
+                    /*
+                     * Read the state exposed through
+                     * both interfaces while inside
+                     * the callback.
+                     */
+
+                    cp(
+                        "POP_EVENT_STATE",
+                        describeState(e.state)
+                    );
+
+                    cp(
+                        "HISTORY_STATE_IN_POP",
+                        describeState(history.state)
+                    );
+
+                    cp(
+                        "POPSTATE_EXIT"
                     );
 
                     resolve(e);
@@ -215,221 +240,286 @@ function waitPop() {
     );
 }
 
-async function runV17() {
+async function runV18() {
 
-    box.innerHTML = "";
+    logBox.innerHTML = "";
 
-    showPrevious();
+    previousRun();
 
     seq = 0;
     events = [];
 
     let blurCount = 0;
     let replaceCount = 0;
+    let anomalyCount = 0;
 
     log(
-        "V17 START",
+        "V18 START",
         "info"
     );
 
-    log(
-        navigator.userAgent
-    );
-
+    log(navigator.userAgent);
     log("");
 
     try {
 
         /*
-         * Clean starting state.
+         * Baseline.
          */
 
-        checkpoint(
-            "BASELINE"
-        );
+        cp("BASELINE");
 
         history.replaceState(
-            "v17-base",
+            {
+                test:"v18-base",
+                marker:0x1800
+            },
             "",
             location.pathname
         );
 
         /*
-         * Create the element which will
-         * initially hold focus.
+         * State that will become the target
+         * of history.back().
          */
 
-        checkpoint(
-            "CREATE_INPUT"
+        const originalState = {
+            test:"v18-original",
+            marker:0x1818,
+            text:"ORIGINAL_STATE"
+        };
+
+        cp(
+            "CREATE_ORIGINAL_STATE",
+            describeState(originalState)
         );
+
+        history.pushState(
+            originalState,
+            "",
+            location.pathname +
+            "#v18target"
+        );
+
+        cp("PUSH_ORIGINAL_COMPLETE");
+
+        /*
+         * Move to a second history entry.
+         */
+
+        history.pushState(
+            {
+                test:"v18-current",
+                marker:0x1820,
+                text:"CURRENT_STATE"
+            },
+            "",
+            location.pathname
+        );
+
+        cp("PUSH_CURRENT_COMPLETE");
+
+        /*
+         * Focus target.
+         */
 
         const input =
             document.createElement("input");
 
-        input.id =
-            "v17-input";
-
         input.value =
-            "focused element";
+            "V18 focused input";
 
         document.body.insertBefore(
             input,
             document.body.firstChild
         );
 
-        /*
-         * This is the callback we're testing.
-         *
-         * It intentionally performs only the
-         * History API operation documented in
-         * the historical trigger.
-         */
+        input.onfocus = function() {
+
+            cp("INPUT_FOCUS");
+        };
 
         input.onblur = function() {
 
             blurCount++;
 
-            checkpoint(
-                "BLUR_ENTER"
+            cp(
+                "BLUR_ENTER",
+                "count=" + blurCount
             );
 
-            try {
+            /*
+             * Record what WebKit exposes before
+             * replaceState.
+             */
 
-                checkpoint(
-                    "BEFORE_REPLACE_FROM_BLUR"
-                );
+            const before =
+                history.state;
 
-                history.replaceState(
-                    "v17-replaced",
-                    "",
-                    location.href
-                );
+            cp(
+                "STATE_BEFORE_REPLACE",
+                describeState(before)
+            );
 
-                replaceCount++;
+            /*
+             * Replace the state while executing
+             * from the blur callback.
+             */
 
-                checkpoint(
-                    "AFTER_REPLACE_FROM_BLUR"
-                );
+            const replacement = {
+                test:"v18-replacement",
+                marker:0x18FF,
+                text:"REPLACEMENT_STATE"
+            };
 
-            } catch(e) {
+            cp(
+                "BEFORE_REPLACE_STATE",
+                describeState(replacement)
+            );
 
-                checkpoint(
-                    "REPLACE_EXCEPTION " +
-                    String(e)
+            history.replaceState(
+                replacement,
+                "",
+                location.href
+            );
+
+            replaceCount++;
+
+            cp(
+                "AFTER_REPLACE_STATE"
+            );
+
+            /*
+             * Immediately observe the state again.
+             */
+
+            const after =
+                history.state;
+
+            cp(
+                "STATE_AFTER_REPLACE",
+                describeState(after)
+            );
+
+            if (
+                !after ||
+                after.test !==
+                    "v18-replacement" ||
+                after.marker !==
+                    0x18FF
+            ) {
+
+                anomalyCount++;
+
+                cp(
+                    "ANOMALY_AFTER_REPLACE",
+                    describeState(after)
                 );
             }
 
-            checkpoint(
-                "BLUR_EXIT"
-            );
+            cp("BLUR_EXIT");
         };
 
-        input.onfocus = function() {
-
-            checkpoint(
-                "INPUT_FOCUS"
-            );
-        };
-
-        /*
-         * Establish the same-document history
-         * arrangement.
-         *
-         * First entry contains #foo.
-         * Second entry is the current state.
-         */
-
-        checkpoint(
-            "PUSH_FRAGMENT_STATE"
-        );
-
-        history.pushState(
-            "v17-state1",
-            "",
-            location.pathname + "#foo"
-        );
-
-        checkpoint(
-            "PUSH_CURRENT_STATE"
-        );
-
-        history.pushState(
-            "v17-state2",
-            "",
-            location.pathname
-        );
-
-        /*
-         * Give input the focus before navigating
-         * back to the fragment.
-         */
-
-        checkpoint(
-            "BEFORE_INPUT_FOCUS"
-        );
+        cp("BEFORE_INPUT_FOCUS");
 
         input.focus();
 
-        checkpoint(
-            "AFTER_INPUT_FOCUS"
-        );
+        cp("AFTER_INPUT_FOCUS");
 
         await sleep(100);
 
         /*
-         * history.back() should navigate to
-         * the #foo history entry.
-         *
-         * We're recording whether blur and
-         * replaceState occur before/after
-         * history.back() returns.
+         * Same-document navigation back to
+         * the fragment entry.
          */
 
         const pop =
-            waitPop();
+            waitForPop();
 
-        checkpoint(
-            "BEFORE_HISTORY_BACK"
-        );
+        cp("BEFORE_HISTORY_BACK");
 
         history.back();
 
-        checkpoint(
+        cp(
             "AFTER_HISTORY_BACK_RETURN"
         );
 
-        await pop;
+        const popEvent =
+            await pop;
 
-        checkpoint(
-            "AFTER_POPSTATE"
+        cp(
+            "AFTER_POPSTATE",
+            describeState(popEvent.state)
         );
+
+        /*
+         * Compare the state once the navigation
+         * operation has completely settled.
+         */
 
         await sleep(250);
 
-        checkpoint(
-            "FINAL_CHECK"
+        cp("SETTLED_CHECK");
+
+        const finalHistoryState =
+            history.state;
+
+        const finalEventState =
+            popEvent.state;
+
+        cp(
+            "FINAL_HISTORY_STATE",
+            describeState(finalHistoryState)
         );
 
-        log("");
-        log(
-            "blur callbacks = " +
-            blurCount
+        cp(
+            "FINAL_EVENT_STATE",
+            describeState(finalEventState)
         );
 
-        log(
-            "replaceState in blur = " +
-            replaceCount
-        );
+        /*
+         * We expect the replacement state to be
+         * consistently visible after replacement.
+         */
 
-        log(
-            "final state = " +
-            String(history.state)
-        );
+        if (
+            !finalHistoryState ||
+            finalHistoryState.test !==
+                "v18-replacement" ||
+            finalHistoryState.marker !==
+                0x18FF
+        ) {
 
-        log(
-            "final hash = " +
-            location.hash
-        );
+            anomalyCount++;
+
+            cp(
+                "FINAL_HISTORY_ANOMALY",
+                describeState(finalHistoryState)
+            );
+        }
+
+        /*
+         * Basic object integrity checks only.
+         */
+
+        cp("OBJECT_INTEGRITY_CHECK");
+
+        if (
+            originalState.test !==
+                "v18-original" ||
+            originalState.marker !==
+                0x1818 ||
+            originalState.text !==
+                "ORIGINAL_STATE"
+        ) {
+
+            anomalyCount++;
+
+            cp(
+                "ORIGINAL_OBJECT_CHANGED",
+                describeState(originalState)
+            );
+        }
 
         /*
          * Cleanup.
@@ -437,7 +527,6 @@ async function runV17() {
 
         input.onblur = null;
         input.onfocus = null;
-
         input.remove();
 
         history.replaceState(
@@ -446,31 +535,41 @@ async function runV17() {
             location.pathname
         );
 
-        checkpoint(
-            "CLEANUP_COMPLETE"
-        );
+        cp("CLEANUP_COMPLETE");
 
-        finished();
+        complete();
 
         log("");
         log(
-            "======= V17 RESULT =======",
+            "======= V18 RESULT =======",
             "info"
         );
 
         log(
-            "STATUS: NORMAL",
-            "ok"
+            "STATUS: " +
+            (
+                anomalyCount === 0
+                ? "NORMAL"
+                : "ANOMALY"
+            ),
+            anomalyCount === 0
+                ? "ok"
+                : "bad"
         );
 
         log(
-            "BLUR: " +
+            "BLUR CALLBACKS: " +
             blurCount
         );
 
         log(
             "REPLACE IN BLUR: " +
             replaceCount
+        );
+
+        log(
+            "ANOMALIES: " +
+            anomalyCount
         );
 
         log(
@@ -485,14 +584,14 @@ async function runV17() {
 
     } catch(e) {
 
-        checkpoint(
-            "JS_EXCEPTION " +
+        cp(
+            "JS_EXCEPTION",
             String(e)
         );
 
         log("");
         log(
-            "V17 EXCEPTION",
+            "V18 EXCEPTION",
             "bad"
         );
 
@@ -503,7 +602,7 @@ async function runV17() {
     }
 }
 
-showPrevious();
+previousRun();
 
 </script>
 </body>
