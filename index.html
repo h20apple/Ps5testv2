@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V24 Capability Fingerprint</title>
+<title>PS5 13.60 — V25 Shadow/Observer Lifetime Probe</title>
 
 <style>
 body {
@@ -14,7 +14,6 @@ body {
 button {
     font:16px monospace;
     padding:10px;
-    margin-right:8px;
 }
 #log {
     background:#17233a;
@@ -22,8 +21,8 @@ button {
     margin-top:12px;
     white-space:pre-wrap;
 }
-.yes  { color:#59ff7a; }
-.no   { color:#ff6868; }
+.ok   { color:#59ff7a; }
+.bad  { color:#ff6868; }
 .info { color:#63caff; }
 .warn { color:#ffd166; }
 </style>
@@ -31,582 +30,917 @@ button {
 
 <body>
 
-<h2>PS5 13.60 — V24 Capability Fingerprint</h2>
+<h2>PS5 13.60 — V25 Shadow/Observer Lifetime Probe</h2>
 
-<button onclick="runV24()">RUN V24</button>
+<button onclick="runV25()">RUN V25</button>
 
 <div id="log"></div>
+<div id="sandbox"></div>
 
 <script>
 "use strict";
 
-const out = document.getElementById("log");
+const KEY = "PS5_V25_CP";
 
-let yes = 0;
-let no = 0;
-let errors = 0;
+const out =
+    document.getElementById("log");
+
+const sandbox =
+    document.getElementById("sandbox");
+
+let seq = 0;
+let pass = 0;
+let exceptions = 0;
+let anomalies = 0;
 
 function log(text, cls="") {
-    const d = document.createElement("div");
+
+    const d =
+        document.createElement("div");
+
     d.textContent = text;
     d.className = cls;
+
     out.appendChild(d);
 }
 
-function section(name) {
-    log("");
-    log("===== " + name + " =====", "info");
-}
+function cp(test, phase, detail="") {
 
-function result(name, supported, detail="") {
+    seq++;
 
-    if (supported) yes++;
-    else no++;
+    try {
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                status:"RUNNING",
+                test:test,
+                phase:phase,
+                detail:detail,
+                sequence:seq,
+                time:Date.now()
+            })
+        );
+
+    } catch(e) {}
 
     log(
-        (supported ? "[YES] " : "[NO ] ") +
-        name +
+        seq + ": [" +
+        test + "] " +
+        phase +
         (detail ? " — " + detail : ""),
-        supported ? "yes" : "no"
-    );
-}
-
-function exists(name, value) {
-    result(name, typeof value !== "undefined",
-        typeof value);
-}
-
-function css(name, property, value) {
-
-    let supported = false;
-
-    try {
-        supported =
-            !!window.CSS &&
-            typeof CSS.supports === "function" &&
-            CSS.supports(property, value);
-    } catch(e) {
-        errors++;
-    }
-
-    result(
-        name,
-        supported,
-        property + ": " + value
-    );
-}
-
-async function runV24() {
-
-    out.innerHTML = "";
-
-    yes = 0;
-    no = 0;
-    errors = 0;
-
-    log("V24 START", "info");
-    log(navigator.userAgent);
-
-    /*
-     * JavaScript / memory
-     */
-
-    section("JAVASCRIPT / MEMORY");
-
-    exists("ArrayBuffer", window.ArrayBuffer);
-    exists("SharedArrayBuffer", window.SharedArrayBuffer);
-    exists("DataView", window.DataView);
-    exists("Uint8Array", window.Uint8Array);
-    exists("BigInt", window.BigInt);
-    exists("BigInt64Array", window.BigInt64Array);
-    exists("WebAssembly", window.WebAssembly);
-    exists("Atomics", window.Atomics);
-    exists("Proxy", window.Proxy);
-    exists("WeakRef", window.WeakRef);
-    exists("FinalizationRegistry", window.FinalizationRegistry);
-    exists("structuredClone", window.structuredClone);
-
-    /*
-     * Workers / async
-     */
-
-    section("WORKERS / ASYNC");
-
-    exists("Worker", window.Worker);
-    exists("SharedWorker", window.SharedWorker);
-    exists("MessageChannel", window.MessageChannel);
-    exists("BroadcastChannel", window.BroadcastChannel);
-    exists("queueMicrotask", window.queueMicrotask);
-    exists("requestIdleCallback", window.requestIdleCallback);
-
-    /*
-     * Storage
-     */
-
-    section("STORAGE");
-
-    exists("localStorage", window.localStorage);
-    exists("sessionStorage", window.sessionStorage);
-    exists("indexedDB", window.indexedDB);
-    exists("caches", window.caches);
-
-    /*
-     * DOM
-     */
-
-    section("DOM");
-
-    exists("MutationObserver", window.MutationObserver);
-    exists("IntersectionObserver", window.IntersectionObserver);
-    exists("ResizeObserver", window.ResizeObserver);
-    exists("DOMParser", window.DOMParser);
-    exists("XMLSerializer", window.XMLSerializer);
-    exists("Range", window.Range);
-    exists("Selection", window.Selection);
-    exists("NodeIterator", window.NodeIterator);
-    exists("TreeWalker", window.TreeWalker);
-    exists("ShadowRoot", window.ShadowRoot);
-    exists("customElements", window.customElements);
-
-    let attachShadow = false;
-
-    try {
-        attachShadow =
-            typeof document.createElement("div")
-                .attachShadow === "function";
-    } catch(e) {
-        errors++;
-    }
-
-    result("Element.attachShadow", attachShadow);
-
-    /*
-     * Events
-     */
-
-    section("EVENTS");
-
-    exists("Event", window.Event);
-    exists("CustomEvent", window.CustomEvent);
-    exists("FocusEvent", window.FocusEvent);
-    exists("MouseEvent", window.MouseEvent);
-    exists("PointerEvent", window.PointerEvent);
-    exists("TouchEvent", window.TouchEvent);
-    exists("InputEvent", window.InputEvent);
-    exists("KeyboardEvent", window.KeyboardEvent);
-
-    /*
-     * Fonts
-     */
-
-    section("FONTS");
-
-    exists("FontFace", window.FontFace);
-
-    result(
-        "document.fonts",
-        typeof document.fonts !== "undefined"
-    );
-
-    if (document.fonts) {
-
-        result(
-            "FontFaceSet.add",
-            typeof document.fonts.add === "function"
-        );
-
-        result(
-            "FontFaceSet.delete",
-            typeof document.fonts.delete === "function"
-        );
-
-        result(
-            "FontFaceSet.check",
-            typeof document.fonts.check === "function"
-        );
-
-        result(
-            "FontFaceSet.ready",
-            typeof document.fonts.ready !== "undefined"
-        );
-    }
-
-    /*
-     * Graphics
-     */
-
-    section("GRAPHICS");
-
-    exists("CanvasRenderingContext2D",
-        window.CanvasRenderingContext2D);
-
-    exists("WebGLRenderingContext",
-        window.WebGLRenderingContext);
-
-    exists("WebGL2RenderingContext",
-        window.WebGL2RenderingContext);
-
-    exists("ImageBitmap",
-        window.ImageBitmap);
-
-    exists("OffscreenCanvas",
-        window.OffscreenCanvas);
-
-    /*
-     * SVG
-     */
-
-    section("SVG");
-
-    exists("SVGElement", window.SVGElement);
-    exists("SVGSVGElement", window.SVGSVGElement);
-    exists("SVGPathElement", window.SVGPathElement);
-    exists("SVGAnimationElement", window.SVGAnimationElement);
-
-    /*
-     * Networking
-     */
-
-    section("NETWORK");
-
-    exists("fetch", window.fetch);
-    exists("XMLHttpRequest", window.XMLHttpRequest);
-    exists("WebSocket", window.WebSocket);
-    exists("EventSource", window.EventSource);
-    exists("URL", window.URL);
-    exists("URLSearchParams", window.URLSearchParams);
-
-    /*
-     * Crypto
-     */
-
-    section("CRYPTO");
-
-    result(
-        "crypto",
-        typeof window.crypto !== "undefined"
-    );
-
-    result(
-        "crypto.subtle",
-        !!(
-            window.crypto &&
-            window.crypto.subtle
-        )
-    );
-
-    /*
-     * Media
-     */
-
-    section("MEDIA");
-
-    exists("AudioContext", window.AudioContext);
-    exists("webkitAudioContext", window.webkitAudioContext);
-    exists("MediaSource", window.MediaSource);
-    exists("MediaRecorder", window.MediaRecorder);
-    exists("RTCPeerConnection", window.RTCPeerConnection);
-
-    /*
-     * History / navigation
-     */
-
-    section("HISTORY");
-
-    result(
-        "history.pushState",
-        typeof history.pushState === "function"
-    );
-
-    result(
-        "history.replaceState",
-        typeof history.replaceState === "function"
-    );
-
-    result(
-        "history.back",
-        typeof history.back === "function"
-    );
-
-    /*
-     * CSS
-     */
-
-    section("CSS");
-
-    result(
-        "CSS.supports",
-        !!window.CSS &&
-        typeof CSS.supports === "function"
-    );
-
-    css("Flexbox",
-        "display",
-        "flex");
-
-    css("Grid",
-        "display",
-        "grid");
-
-    css("CSS variables",
-        "--v24",
-        "1");
-
-    css("Filter",
-        "filter",
-        "blur(1px)");
-
-    css("Backdrop filter",
-        "backdrop-filter",
-        "blur(1px)");
-
-    css("Clip path",
-        "clip-path",
-        "circle(20px)");
-
-    css("Contain",
-        "contain",
-        "layout");
-
-    css("Content visibility",
-        "content-visibility",
-        "hidden");
-
-    css("Aspect ratio",
-        "aspect-ratio",
-        "1 / 1");
-
-    css("Object fit",
-        "object-fit",
-        "cover");
-
-    css("Writing mode",
-        "writing-mode",
-        "vertical-rl");
-
-    css("CSS animation",
-        "animation-name",
-        "v24");
-
-    css("CSS transform",
-        "transform",
-        "translateX(1px)");
-
-    css("CSS perspective",
-        "perspective",
-        "100px");
-
-    css("CSS mask",
-        "-webkit-mask-image",
-        "linear-gradient(black,transparent)");
-
-    css("CSS columns",
-        "column-count",
-        "2");
-
-    css("Position sticky",
-        "position",
-        "sticky");
-
-    css("Position fixed",
-        "position",
-        "fixed");
-
-    /*
-     * Newer CSS features.
-     */
-
-    css("Anchor positioning",
-        "anchor-name",
-        "--v24-anchor");
-
-    css("Container queries",
-        "container-type",
-        "inline-size");
-
-    /*
-     * Selector support.
-     */
-
-    section("SELECTORS");
-
-    function selectorTest(name, selector) {
-
-        let ok = false;
-
-        try {
-
-            if (
-                window.CSS &&
-                typeof CSS.supports === "function"
-            ) {
-                ok =
-                    CSS.supports(
-                        "selector(" +
-                        selector +
-                        ")"
-                    );
-            }
-
-        } catch(e) {
-            errors++;
-        }
-
-        result(name, ok, selector);
-    }
-
-    selectorTest(":has()", ":has(div)");
-    selectorTest(":is()", ":is(div,span)");
-    selectorTest(":where()", ":where(div)");
-    selectorTest(":focus-visible", ":focus-visible");
-
-    /*
-     * HTML elements / APIs.
-     */
-
-    section("HTML FEATURES");
-
-    function elementFeature(name, tag, property) {
-
-        let supported = false;
-
-        try {
-            const e =
-                document.createElement(tag);
-
-            supported =
-                property in e;
-
-        } catch(e) {
-            errors++;
-        }
-
-        result(
-            name,
-            supported,
-            tag + "." + property
-        );
-    }
-
-    elementFeature(
-        "dialog.showModal",
-        "dialog",
-        "showModal"
-    );
-
-    elementFeature(
-        "details.open",
-        "details",
-        "open"
-    );
-
-    elementFeature(
-        "template.content",
-        "template",
-        "content"
-    );
-
-    elementFeature(
-        "iframe.srcdoc",
-        "iframe",
-        "srcdoc"
-    );
-
-    /*
-     * Small live checks.
-     */
-
-    section("LIVE CHECKS");
-
-    try {
-
-        const r =
-            document.createRange();
-
-        result(
-            "createRange()",
-            !!r
-        );
-
-    } catch(e) {
-
-        errors++;
-        result("createRange()", false);
-    }
-
-    try {
-
-        const div =
-            document.createElement("div");
-
-        div.innerHTML =
-            "<span>V24</span>";
-
-        const clone =
-            div.cloneNode(true);
-
-        result(
-            "DOM clone",
-            clone.textContent === "V24"
-        );
-
-    } catch(e) {
-
-        errors++;
-        result("DOM clone", false);
-    }
-
-    try {
-
-        const parser =
-            new DOMParser();
-
-        const doc =
-            parser.parseFromString(
-                "<root><x>V24</x></root>",
-                "text/xml"
-            );
-
-        result(
-            "DOMParser XML",
-            doc.documentElement
-               .firstChild
-               .textContent === "V24"
-        );
-
-    } catch(e) {
-
-        errors++;
-        result("DOMParser XML", false);
-    }
-
-    /*
-     * Result
-     */
-
-    section("V24 RESULT");
-
-    log(
-        "SUPPORTED: " + yes,
-        "yes"
-    );
-
-    log(
-        "UNSUPPORTED: " + no,
-        "no"
-    );
-
-    log(
-        "TEST ERRORS: " + errors,
-        errors ? "warn" : "yes"
-    );
-
-    log("");
-    log(
-        "V24 COMPLETE",
         "info"
     );
 }
+
+function previous() {
+
+    try {
+
+        const raw =
+            localStorage.getItem(KEY);
+
+        if (!raw)
+            return;
+
+        const x =
+            JSON.parse(raw);
+
+        if (x.status !== "RUNNING")
+            return;
+
+        log(
+            "******************************",
+            "bad"
+        );
+
+        log(
+            "PREVIOUS V25 DID NOT COMPLETE",
+            "bad"
+        );
+
+        log(
+            "TEST: " + x.test,
+            "bad"
+        );
+
+        log(
+            "LAST PHASE: " + x.phase,
+            "bad"
+        );
+
+        if (x.detail)
+            log(
+                "DETAIL: " + x.detail,
+                "bad"
+            );
+
+        log(
+            "******************************",
+            "bad"
+        );
+
+    } catch(e) {}
+}
+
+function finished() {
+
+    try {
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                status:"COMPLETE",
+                time:Date.now()
+            })
+        );
+
+    } catch(e) {}
+}
+
+function delay(ms) {
+
+    return new Promise(
+        resolve => setTimeout(resolve, ms)
+    );
+}
+
+function reset() {
+    sandbox.innerHTML = "";
+}
+
+
+/*
+ * TEST A
+ *
+ * MutationObserver callback removes
+ * the Shadow DOM host while mutation
+ * delivery is occurring.
+ */
+
+async function testA() {
+
+    const name =
+        "A_MUTATION_SHADOW_REMOVE";
+
+    reset();
+
+    cp(name,"CREATE_HOST");
+
+    const host =
+        document.createElement("div");
+
+    sandbox.appendChild(host);
+
+    const shadow =
+        host.attachShadow({
+            mode:"open"
+        });
+
+    const child =
+        document.createElement("span");
+
+    child.textContent = "V25-A";
+
+    shadow.appendChild(child);
+
+    let callbacks = 0;
+
+    const observer =
+        new MutationObserver(
+            function(records) {
+
+                callbacks++;
+
+                cp(
+                    name,
+                    "OBSERVER_ENTER",
+                    "records=" + records.length
+                );
+
+                cp(
+                    name,
+                    "REMOVE_HOST"
+                );
+
+                host.remove();
+
+                cp(
+                    name,
+                    "READ_RETAINED_SHADOW"
+                );
+
+                void shadow.childNodes.length;
+                void child.textContent;
+
+                cp(
+                    name,
+                    "OBSERVER_EXIT"
+                );
+            }
+        );
+
+    observer.observe(
+        shadow,
+        {
+            childList:true,
+            subtree:true,
+            characterData:true
+        }
+    );
+
+    cp(name,"MUTATE");
+
+    child.textContent =
+        "V25-A-MUTATED";
+
+    cp(name,"MUTATE_RETURNED");
+
+    await Promise.resolve();
+    await delay(50);
+
+    observer.disconnect();
+
+    if (callbacks !== 1) {
+
+        anomalies++;
+
+        log(
+            "Unexpected callback count: " +
+            callbacks,
+            "bad"
+        );
+    }
+
+    if (
+        child.textContent !==
+        "V25-A-MUTATED"
+    ) {
+
+        anomalies++;
+
+        log(
+            "Retained child mismatch",
+            "bad"
+        );
+    }
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+/*
+ * TEST B
+ *
+ * MutationObserver callback replaces
+ * the contents of its observed
+ * ShadowRoot.
+ */
+
+async function testB() {
+
+    const name =
+        "B_SHADOW_REPLACE";
+
+    reset();
+
+    cp(name,"CREATE");
+
+    const host =
+        document.createElement("div");
+
+    sandbox.appendChild(host);
+
+    const shadow =
+        host.attachShadow({
+            mode:"open"
+        });
+
+    const original =
+        document.createElement("div");
+
+    original.textContent =
+        "ORIGINAL";
+
+    shadow.appendChild(original);
+
+    let first = true;
+
+    const observer =
+        new MutationObserver(
+            function(records) {
+
+                cp(
+                    name,
+                    "OBSERVER_ENTER",
+                    "records=" + records.length
+                );
+
+                if (first) {
+
+                    first = false;
+
+                    cp(
+                        name,
+                        "REPLACE_CHILDREN"
+                    );
+
+                    shadow.innerHTML =
+                        "<span>REPLACEMENT</span>";
+
+                    cp(
+                        name,
+                        "READ_OLD_NODE"
+                    );
+
+                    void original.textContent;
+                    void original.ownerDocument;
+                }
+
+                cp(
+                    name,
+                    "OBSERVER_EXIT"
+                );
+            }
+        );
+
+    observer.observe(
+        shadow,
+        {
+            childList:true,
+            subtree:true,
+            characterData:true
+        }
+    );
+
+    cp(name,"TRIGGER");
+
+    original.textContent =
+        "TRIGGER";
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    observer.disconnect();
+
+    cp(name,"CHECK");
+
+    if (
+        shadow.textContent !==
+        "REPLACEMENT"
+    ) {
+
+        anomalies++;
+
+        log(
+            "Shadow replacement mismatch",
+            "bad"
+        );
+    }
+
+    host.remove();
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+/*
+ * TEST C
+ *
+ * Slot redistribution while nodes
+ * and host are being changed.
+ */
+
+async function testC() {
+
+    const name =
+        "C_SLOT_REDISTRIBUTION";
+
+    reset();
+
+    cp(name,"CREATE_HOST");
+
+    const host =
+        document.createElement("div");
+
+    const shadow =
+        host.attachShadow({
+            mode:"open"
+        });
+
+    shadow.innerHTML =
+        "<slot name='a'></slot>" +
+        "<slot name='b'></slot>";
+
+    const one =
+        document.createElement("span");
+
+    one.slot = "a";
+    one.textContent = "ONE";
+
+    const two =
+        document.createElement("span");
+
+    two.slot = "b";
+    two.textContent = "TWO";
+
+    host.appendChild(one);
+    host.appendChild(two);
+
+    sandbox.appendChild(host);
+
+    const slots =
+        shadow.querySelectorAll("slot");
+
+    cp(name,"INITIAL_ASSIGNMENT");
+
+    void slots[0].assignedNodes();
+    void slots[1].assignedNodes();
+
+    cp(name,"MOVE_SLOT");
+
+    one.slot = "b";
+    two.slot = "a";
+
+    await Promise.resolve();
+
+    cp(name,"READ_ASSIGNMENT");
+
+    const a =
+        slots[0].assignedNodes();
+
+    const b =
+        slots[1].assignedNodes();
+
+    cp(name,"REMOVE_HOST");
+
+    host.remove();
+
+    cp(name,"READ_AFTER_REMOVE");
+
+    void a.length;
+    void b.length;
+    void one.textContent;
+    void two.textContent;
+    void shadow.childNodes.length;
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+/*
+ * TEST D
+ *
+ * ResizeObserver callback removes
+ * its own observed host.
+ */
+
+async function testD() {
+
+    const name =
+        "D_RESIZE_REMOVE";
+
+    reset();
+
+    if (
+        typeof ResizeObserver ===
+        "undefined"
+    ) {
+
+        cp(name,"UNSUPPORTED");
+
+        pass++;
+        return;
+    }
+
+    cp(name,"CREATE");
+
+    const host =
+        document.createElement("div");
+
+    host.style.width = "100px";
+    host.style.height = "20px";
+
+    const shadow =
+        host.attachShadow({
+            mode:"open"
+        });
+
+    shadow.innerHTML =
+        "<div>RESIZE</div>";
+
+    sandbox.appendChild(host);
+
+    let removed = false;
+
+    const ro =
+        new ResizeObserver(
+            function(entries) {
+
+                cp(
+                    name,
+                    "RESIZE_ENTER",
+                    "entries=" + entries.length
+                );
+
+                if (!removed) {
+
+                    removed = true;
+
+                    cp(
+                        name,
+                        "REMOVE_HOST"
+                    );
+
+                    host.remove();
+
+                    cp(
+                        name,
+                        "READ_RETAINED"
+                    );
+
+                    void shadow.textContent;
+                    void host.ownerDocument;
+                }
+
+                cp(
+                    name,
+                    "RESIZE_EXIT"
+                );
+            }
+        );
+
+    ro.observe(host);
+
+    cp(name,"CHANGE_SIZE");
+
+    host.style.width =
+        "150px";
+
+    await delay(250);
+
+    ro.disconnect();
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+/*
+ * TEST E
+ *
+ * Custom-element disconnectedCallback
+ * performs synchronous DOM mutation.
+ */
+
+async function testE() {
+
+    const name =
+        "E_CUSTOM_ELEMENT_REMOVE";
+
+    reset();
+
+    if (
+        !window.customElements
+    ) {
+
+        cp(name,"UNSUPPORTED");
+
+        pass++;
+        return;
+    }
+
+    const tag =
+        "v25-element";
+
+    if (
+        !customElements.get(tag)
+    ) {
+
+        class V25Element
+            extends HTMLElement {
+
+            connectedCallback() {
+
+                cp(
+                    name,
+                    "CONNECTED"
+                );
+            }
+
+            disconnectedCallback() {
+
+                cp(
+                    name,
+                    "DISCONNECTED_ENTER"
+                );
+
+                const marker =
+                    document.createElement(
+                        "span"
+                    );
+
+                marker.textContent =
+                    "DISCONNECTED_OK";
+
+                sandbox.appendChild(
+                    marker
+                );
+
+                cp(
+                    name,
+                    "DISCONNECTED_EXIT"
+                );
+            }
+        }
+
+        customElements.define(
+            tag,
+            V25Element
+        );
+    }
+
+    cp(name,"CREATE");
+
+    const element =
+        document.createElement(tag);
+
+    sandbox.appendChild(element);
+
+    cp(name,"REMOVE");
+
+    element.remove();
+
+    cp(name,"REMOVE_RETURNED");
+
+    if (
+        sandbox.textContent
+            .indexOf(
+                "DISCONNECTED_OK"
+            ) === -1
+    ) {
+
+        anomalies++;
+
+        log(
+            "Disconnected callback mismatch",
+            "bad"
+        );
+    }
+
+    cp(name,"READ_RETAINED_ELEMENT");
+
+    void element.ownerDocument;
+    void element.isConnected;
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+/*
+ * TEST F
+ *
+ * Observer callback removes the
+ * observed subtree and then creates
+ * another Shadow DOM subtree.
+ */
+
+async function testF() {
+
+    const name =
+        "F_OBSERVER_REENTRANCY";
+
+    reset();
+
+    cp(name,"CREATE");
+
+    const outer =
+        document.createElement("div");
+
+    const host =
+        document.createElement("div");
+
+    outer.appendChild(host);
+    sandbox.appendChild(outer);
+
+    const shadow =
+        host.attachShadow({
+            mode:"open"
+        });
+
+    const node =
+        document.createElement("span");
+
+    node.textContent =
+        "START";
+
+    shadow.appendChild(node);
+
+    let entered = false;
+
+    const observer =
+        new MutationObserver(
+            function(records) {
+
+                cp(
+                    name,
+                    "OBSERVER_ENTER"
+                );
+
+                if (!entered) {
+
+                    entered = true;
+
+                    cp(
+                        name,
+                        "REMOVE_OUTER"
+                    );
+
+                    outer.remove();
+
+                    cp(
+                        name,
+                        "CREATE_SECOND_HOST"
+                    );
+
+                    const second =
+                        document.createElement(
+                            "div"
+                        );
+
+                    sandbox.appendChild(
+                        second
+                    );
+
+                    const secondShadow =
+                        second.attachShadow({
+                            mode:"open"
+                        });
+
+                    secondShadow.innerHTML =
+                        "<b>SECOND</b>";
+
+                    cp(
+                        name,
+                        "READ_OLD_REFERENCES"
+                    );
+
+                    void shadow.textContent;
+                    void node.textContent;
+                    void outer.ownerDocument;
+
+                    second.remove();
+                }
+
+                cp(
+                    name,
+                    "OBSERVER_EXIT"
+                );
+            }
+        );
+
+    observer.observe(
+        shadow,
+        {
+            subtree:true,
+            childList:true,
+            characterData:true
+        }
+    );
+
+    cp(name,"TRIGGER");
+
+    node.textContent =
+        "CHANGED";
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    observer.disconnect();
+
+    cp(name,"COMPLETE");
+
+    pass++;
+}
+
+
+async function runV25() {
+
+    out.innerHTML = "";
+    sandbox.innerHTML = "";
+
+    previous();
+
+    seq = 0;
+    pass = 0;
+    exceptions = 0;
+    anomalies = 0;
+
+    log(
+        "V25 START",
+        "info"
+    );
+
+    log(navigator.userAgent);
+    log("");
+
+    try {
+
+        await testA();
+        await delay(100);
+
+        await testB();
+        await delay(100);
+
+        await testC();
+        await delay(100);
+
+        await testD();
+        await delay(100);
+
+        await testE();
+        await delay(100);
+
+        await testF();
+
+        finished();
+
+        log("");
+        log(
+            "======= V25 RESULT =======",
+            "info"
+        );
+
+        log(
+            "STATUS: " +
+            (
+                anomalies === 0
+                    ? "NORMAL"
+                    : "ANOMALY"
+            ),
+            anomalies === 0
+                ? "ok"
+                : "bad"
+        );
+
+        log(
+            "TESTS COMPLETED: 6"
+        );
+
+        log(
+            "PASS: " + pass
+        );
+
+        log(
+            "EXCEPTIONS: " +
+            exceptions
+        );
+
+        log(
+            "ANOMALIES: " +
+            anomalies
+        );
+
+        log(
+            "==========================",
+            "info"
+        );
+
+    } catch(e) {
+
+        exceptions++;
+
+        cp(
+            "HARNESS",
+            "UNCAUGHT_EXCEPTION",
+            e.name + ": " +
+            e.message
+        );
+
+        log("");
+        log(
+            "V25 STOPPED",
+            "bad"
+        );
+
+        log(
+            e.name + ": " +
+            e.message,
+            "bad"
+        );
+    }
+}
+
+previous();
 
 </script>
 </body>
