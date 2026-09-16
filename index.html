@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V32 MutationObserver Lifetime</title>
+<title>PS5 13.60 - V33 SSV Entry Verifier</title>
 
 <style>
 body {
@@ -22,12 +22,16 @@ pre {
     white-space:pre-wrap;
     word-break:break-word;
 }
+input {
+    position:absolute;
+    left:-5000px;
+}
 </style>
 
-<h2>PS5 13.60 — V32</h2>
-<div>MutationObserver callback / node lifetime probe</div>
+<h2>PS5 13.60 — V33</h2>
+<div>SSV entry-path verifier — pre-primitive only</div>
 
-<p><button id="run">RUN V32</button></p>
+<p><button id="run">RUN V33</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -36,639 +40,484 @@ pre {
 "use strict";
 
 /*
- * V32
+ * V33
  *
- * Lifetime/re-entrancy diagnostic inspired by
- * WebKit bug 179224:
+ * PS5 13.60 SerializedScriptValue entry-path verifier.
  *
- * "MutationObserver callback should be kept alive
- * as long as its observed nodes are alive"
+ * Tests browser-visible prerequisites associated with the
+ * historical SSV same-document navigation lifetime path.
  *
- * No heap spray/reclaim or memory primitive.
+ * Deliberately stops before:
+ *   - freed-object reclamation
+ *   - heap spraying
+ *   - address disclosure
+ *   - arbitrary read/write
+ *   - native calls
+ *   - ROP/syscalls
  */
 
-const output = document.querySelector("#log");
+const out = document.querySelector("#log");
 const statusBox = document.querySelector("#status");
 const button = document.querySelector("#run");
 
-let pass = 0;
-let exceptions = 0;
+let blurCount = 0;
+let replaceCount = 0;
+let popCount = 0;
 let anomalies = 0;
+let exceptions = 0;
 
 function log(s) {
-    output.textContent += s + "\n";
+    out.textContent += s + "\n";
     console.log(s);
 }
 
 function cp(s) {
     try {
-        localStorage.setItem("PS5_V32_CP", s);
+        localStorage.setItem("PS5_V33_CP", s);
     } catch (_) {}
 
     log("[CP] " + s);
 }
 
-function good(name) {
-    pass++;
-    log("[PASS] " + name);
-}
-
-function bad(name, reason) {
-    anomalies++;
-    log("[ANOMALY] " + name + " :: " + reason);
-}
-
-function caught(name, e) {
-    exceptions++;
-    log("[EXCEPTION] " + name + " :: " + e);
-}
-
 function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(r => setTimeout(r, ms));
 }
 
-/*
- * A
- * Basic observer delivery.
- */
-
-async function testA() {
-
-    const name = "A_BASIC_DELIVERY";
-
-    cp(name + ":CREATE");
-
+function describeState(s) {
     try {
+        if (!s)
+            return String(s);
 
-        const node = document.createElement("div");
-        document.body.appendChild(node);
-
-        let calls = 0;
-
-        const observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(name + ":CALLBACK");
-
-                log(
-                    "[A] records=" +
-                    records.length
-                );
-
-                log(
-                    "[A] node connected=" +
-                    node.isConnected
-                );
-            });
-
-        observer.observe(node, {
-            attributes:true
+        return JSON.stringify({
+            marker:s.marker,
+            sequence:s.sequence,
+            textLength:
+                typeof s.text === "string"
+                ? s.text.length
+                : -1,
+            nested:
+                s.nested &&
+                s.nested.value
         });
-
-        node.setAttribute("data-v32", "1");
-
-        await sleep(50);
-
-        log("[A] callbacks=" + calls);
-
-        if (calls !== 1)
-            bad(name, "unexpected callback count " + calls);
-
-        observer.disconnect();
-        node.remove();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
     } catch(e) {
-        caught(name, e);
+        return "STATE_ERROR:" + e.name;
     }
 }
-
-
-/*
- * B
- * Remove observed node before callback delivery.
- */
-
-async function testB() {
-
-    const name = "B_REMOVE_BEFORE_DELIVERY";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const parent =
-            document.createElement("div");
-
-        const target =
-            document.createElement("span");
-
-        target.textContent = "V32-B";
-
-        parent.appendChild(target);
-        document.body.appendChild(parent);
-
-        let calls = 0;
-
-        const observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(name + ":CALLBACK_ENTER");
-
-                log(
-                    "[B] records=" +
-                    records.length
-                );
-
-                log(
-                    "[B] target connected=" +
-                    target.isConnected
-                );
-
-                log(
-                    "[B] retained text=" +
-                    target.textContent
-                );
-
-                cp(name + ":CALLBACK_EXIT");
-            });
-
-        observer.observe(target, {
-            attributes:true
-        });
-
-        cp(name + ":MUTATE");
-
-        target.setAttribute(
-            "data-test",
-            "removed"
-        );
-
-        cp(name + ":REMOVE");
-
-        parent.remove();
-
-        await sleep(50);
-
-        log("[B] callbacks=" + calls);
-        log(
-            "[B] final connected=" +
-            target.isConnected
-        );
-
-        if (calls !== 1)
-            bad(name, "callback count=" + calls);
-
-        observer.disconnect();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
-
-/*
- * C
- * Observer removes its own target synchronously.
- */
-
-async function testC() {
-
-    const name = "C_REMOVE_IN_CALLBACK";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const outer =
-            document.createElement("div");
-
-        const target =
-            document.createElement("div");
-
-        target.textContent = "V32-C";
-
-        outer.appendChild(target);
-        document.body.appendChild(outer);
-
-        let calls = 0;
-
-        const observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(name + ":CALLBACK_ENTER");
-
-                if (calls === 1) {
-
-                    target.remove();
-
-                    cp(name + ":TARGET_REMOVED");
-
-                    log(
-                        "[C] connected=" +
-                        target.isConnected
-                    );
-
-                    log(
-                        "[C] retained text=" +
-                        target.textContent
-                    );
-
-                    log(
-                        "[C] records=" +
-                        records.length
-                    );
-                }
-
-                cp(name + ":CALLBACK_EXIT");
-            });
-
-        observer.observe(target, {
-            attributes:true,
-            childList:true,
-            subtree:true
-        });
-
-        target.setAttribute(
-            "data-trigger",
-            "1"
-        );
-
-        await sleep(75);
-
-        log("[C] callbacks=" + calls);
-
-        observer.disconnect();
-        outer.remove();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
-
-/*
- * D
- * Replace observed subtree from callback while
- * retaining references to old nodes.
- */
-
-async function testD() {
-
-    const name = "D_REPLACE_SUBTREE";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const host =
-            document.createElement("div");
-
-        host.innerHTML =
-            "<section><b>AAAA</b></section>";
-
-        document.body.appendChild(host);
-
-        const section =
-            host.firstChild;
-
-        const oldChild =
-            section.firstChild;
-
-        let calls = 0;
-
-        const observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(name + ":CALLBACK_ENTER");
-
-                if (calls === 1) {
-
-                    section.innerHTML =
-                        "<i>BBBB</i>";
-
-                    cp(name + ":SUBTREE_REPLACED");
-
-                    log(
-                        "[D] old connected=" +
-                        oldChild.isConnected
-                    );
-
-                    log(
-                        "[D] old text=" +
-                        oldChild.textContent
-                    );
-
-                    log(
-                        "[D] new text=" +
-                        section.textContent
-                    );
-                }
-
-                cp(name + ":CALLBACK_EXIT");
-            });
-
-        observer.observe(section, {
-            attributes:true,
-            childList:true,
-            subtree:true
-        });
-
-        section.setAttribute(
-            "data-v32",
-            "trigger"
-        );
-
-        await sleep(75);
-
-        log("[D] callbacks=" + calls);
-
-        observer.disconnect();
-        host.remove();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
-
-/*
- * E
- * Disconnect observer from inside callback,
- * remove target, then continue using retained
- * wrappers.
- */
-
-async function testE() {
-
-    const name = "E_DISCONNECT_REENTRANT";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const target =
-            document.createElement("div");
-
-        target.innerHTML =
-            "<span>V32-E</span>";
-
-        document.body.appendChild(target);
-
-        const retained =
-            target.firstChild;
-
-        let calls = 0;
-        let observer;
-
-        observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(name + ":CALLBACK_ENTER");
-
-                observer.disconnect();
-
-                cp(name + ":DISCONNECTED");
-
-                target.remove();
-
-                cp(name + ":REMOVED");
-
-                log(
-                    "[E] records=" +
-                    records.length
-                );
-
-                log(
-                    "[E] target connected=" +
-                    target.isConnected
-                );
-
-                log(
-                    "[E] retained connected=" +
-                    retained.isConnected
-                );
-
-                log(
-                    "[E] retained text=" +
-                    retained.textContent
-                );
-
-                cp(name + ":CALLBACK_EXIT");
-            });
-
-        observer.observe(target, {
-            attributes:true,
-            childList:true,
-            subtree:true
-        });
-
-        target.setAttribute(
-            "data-trigger",
-            "1"
-        );
-
-        await sleep(75);
-
-        log("[E] callbacks=" + calls);
-
-        if (calls !== 1)
-            bad(name, "callback count=" + calls);
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
-
-/*
- * F
- * Observer callback causes a second mutation.
- *
- * We deliberately cap this at two callbacks.
- */
-
-async function testF() {
-
-    const name = "F_REENTRANT_MUTATION";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const target =
-            document.createElement("div");
-
-        target.textContent = "V32-F";
-
-        document.body.appendChild(target);
-
-        let calls = 0;
-
-        const observer =
-            new MutationObserver(records => {
-
-                calls++;
-
-                cp(
-                    name +
-                    ":CALLBACK_" +
-                    calls
-                );
-
-                log(
-                    "[F] callback=" +
-                    calls +
-                    " records=" +
-                    records.length
-                );
-
-                if (calls === 1) {
-
-                    target.setAttribute(
-                        "data-second",
-                        "2"
-                    );
-
-                    cp(
-                        name +
-                        ":SECOND_MUTATION"
-                    );
-                }
-            });
-
-        observer.observe(target, {
-            attributes:true
-        });
-
-        target.setAttribute(
-            "data-first",
-            "1"
-        );
-
-        await sleep(100);
-
-        log("[F] callbacks=" + calls);
-
-        if (calls !== 2) {
-            bad(
-                name,
-                "expected 2 deliveries, got " +
-                calls
-            );
-        }
-
-        observer.disconnect();
-        target.remove();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
 
 async function run() {
 
     button.disabled = true;
-    output.textContent = "";
+    out.textContent = "";
 
-    pass = 0;
-    exceptions = 0;
+    blurCount = 0;
+    replaceCount = 0;
+    popCount = 0;
     anomalies = 0;
+    exceptions = 0;
 
     statusBox.textContent =
         "STATUS: RUNNING";
 
     const previous =
         localStorage.getItem(
-            "PS5_V32_CP"
+            "PS5_V33_CP"
         );
 
-    if (previous) {
+    if (previous)
         log(
             "Previous checkpoint: " +
             previous
         );
-    }
 
-    log("PS5 13.60 — V32");
-    log(
-        "MutationObserver Lifetime Probe"
-    );
+    log("PS5 13.60 — V33");
+    log("SSV ENTRY VERIFIER");
     log("");
-
     log(navigator.userAgent);
-
     log("");
 
-    log(
-        "MutationObserver=" +
-        typeof MutationObserver
-    );
+    const anchor1 =
+        document.createElement("div");
 
-    if (
-        typeof MutationObserver
-        !== "function"
-    ) {
+    anchor1.id = "v33-one";
+    anchor1.tabIndex = -1;
+
+    const anchor2 =
+        document.createElement("div");
+
+    anchor2.id = "v33-two";
+    anchor2.tabIndex = -1;
+
+    const input =
+        document.createElement("input");
+
+    input.id = "v33-focus";
+
+    document.body.appendChild(anchor1);
+    document.body.appendChild(anchor2);
+    document.body.appendChild(input);
+
+    /*
+     * Deliberately ordinary structured state.
+     * Large enough to exercise serialization,
+     * but not intended for heap shaping.
+     */
+
+    const originalState = {
+        marker:"V33-ORIGINAL",
+        sequence:1,
+        text:"A".repeat(65536),
+        nested:{
+            value:0x1337
+        },
+        array:[
+            1,2,3,4,5,6,7,8
+        ]
+    };
+
+    const secondState = {
+        marker:"V33-SECOND",
+        sequence:2,
+        text:"B".repeat(65536),
+        nested:{
+            value:0x2664
+        }
+    };
+
+    const replacementState = {
+        marker:"V33-REPLACED",
+        sequence:3,
+        text:"C".repeat(65536),
+        nested:{
+            value:0x3999
+        }
+    };
+
+    let popStateObject = null;
+
+    function onBlur() {
+
+        blurCount++;
+
+        cp("V33:BLUR_ENTER");
 
         log(
-            "[UNSUPPORTED] MutationObserver"
+            "[BLUR] count=" +
+            blurCount
         );
 
-        statusBox.textContent =
-            "STATUS: UNSUPPORTED";
+        log(
+            "[BLUR] history.state BEFORE=" +
+            describeState(
+                history.state
+            )
+        );
 
-        button.disabled = false;
-        return;
+        try {
+
+            cp(
+                "V33:BEFORE_REPLACE_FROM_BLUR"
+            );
+
+            history.replaceState(
+                replacementState,
+                "",
+                location.href
+            );
+
+            replaceCount++;
+
+            cp(
+                "V33:AFTER_REPLACE_FROM_BLUR"
+            );
+
+            log(
+                "[BLUR] replaceState returned"
+            );
+
+            log(
+                "[BLUR] history.state AFTER=" +
+                describeState(
+                    history.state
+                )
+            );
+
+        } catch(e) {
+
+            exceptions++;
+
+            log(
+                "[BLUR EXCEPTION] " +
+                e
+            );
+        }
+
+        cp("V33:BLUR_EXIT");
     }
 
-    await testA();
-    await testB();
-    await testC();
-    await testD();
-    await testE();
-    await testF();
+    input.addEventListener(
+        "blur",
+        onBlur,
+        {once:true}
+    );
 
-    cp("V32:COMPLETE");
+    window.addEventListener(
+        "popstate",
+        function handler(event) {
+
+            popCount++;
+
+            popStateObject =
+                event.state;
+
+            cp(
+                "V33:POPSTATE_" +
+                popCount
+            );
+
+            log(
+                "[POP] count=" +
+                popCount
+            );
+
+            log(
+                "[POP] event.state=" +
+                describeState(
+                    event.state
+                )
+            );
+
+            log(
+                "[POP] history.state=" +
+                describeState(
+                    history.state
+                )
+            );
+
+            window.removeEventListener(
+                "popstate",
+                handler
+            );
+        }
+    );
+
+    try {
+
+        cp("V33:SET_BASE");
+
+        history.replaceState(
+            originalState,
+            "",
+            "#v33-one"
+        );
+
+        log(
+            "[BASE] " +
+            describeState(
+                history.state
+            )
+        );
+
+        cp("V33:PUSH_SECOND");
+
+        history.pushState(
+            secondState,
+            "",
+            "#v33-two"
+        );
+
+        log(
+            "[SECOND] " +
+            describeState(
+                history.state
+            )
+        );
+
+        /*
+         * Establish focus before initiating
+         * same-document traversal.
+         */
+
+        input.focus();
+
+        log(
+            "[FOCUS] active=" +
+            (
+                document.activeElement
+                === input
+            )
+        );
+
+        await sleep(50);
+
+        cp("V33:BEFORE_HISTORY_BACK");
+
+        history.back();
+
+        cp(
+            "V33:AFTER_HISTORY_BACK_RETURN"
+        );
+
+        /*
+         * Focus transition while the history
+         * traversal is being delivered.
+         *
+         * This causes the blur callback which
+         * performs replaceState().
+         */
+
+        anchor1.focus();
+
+        cp(
+            "V33:AFTER_FOCUS_CHANGE"
+        );
+
+        await sleep(400);
+
+        cp("V33:FINAL_CHECK");
+
+        log("");
+        log(
+            "FINAL history.state=" +
+            describeState(
+                history.state
+            )
+        );
+
+        log(
+            "FINAL event.state=" +
+            describeState(
+                popStateObject
+            )
+        );
+
+        log(
+            "FINAL hash=" +
+            location.hash
+        );
+
+        log(
+            "BLUR CALLBACKS=" +
+            blurCount
+        );
+
+        log(
+            "REPLACE IN BLUR=" +
+            replaceCount
+        );
+
+        log(
+            "POP EVENTS=" +
+            popCount
+        );
+
+        /*
+         * Browser-visible consistency checks.
+         */
+
+        if (blurCount !== 1) {
+            anomalies++;
+            log(
+                "[ANOMALY] blur count=" +
+                blurCount
+            );
+        }
+
+        if (replaceCount !== 1) {
+            anomalies++;
+            log(
+                "[ANOMALY] replace count=" +
+                replaceCount
+            );
+        }
+
+        if (popCount !== 1) {
+            anomalies++;
+            log(
+                "[ANOMALY] pop count=" +
+                popCount
+            );
+        }
+
+        /*
+         * Verify original JS objects themselves
+         * remain coherent.
+         */
+
+        if (
+            originalState.marker
+            !== "V33-ORIGINAL" ||
+            originalState.nested.value
+            !== 0x1337 ||
+            originalState.text.length
+            !== 65536
+        ) {
+            anomalies++;
+
+            log(
+                "[ANOMALY] original object changed"
+            );
+        }
+
+        if (
+            replacementState.marker
+            !== "V33-REPLACED" ||
+            replacementState.text.length
+            !== 65536
+        ) {
+            anomalies++;
+
+            log(
+                "[ANOMALY] replacement object changed"
+            );
+        }
+
+        cp("V33:COMPLETE");
+
+    } catch(e) {
+
+        exceptions++;
+
+        log(
+            "[EXCEPTION] " +
+            e
+        );
+
+        cp(
+            "V33:TOP_LEVEL_EXCEPTION"
+        );
+    }
+
+    try {
+        input.remove();
+        anchor1.remove();
+        anchor2.remove();
+    } catch (_) {}
 
     log("");
     log("============================");
-    log("V32 RESULT");
+    log("V33 RESULT");
     log("============================");
 
-    log("TESTS: 6");
-    log("PASS: " + pass);
+    log(
+        "BLUR CALLBACKS: " +
+        blurCount
+    );
+
+    log(
+        "REPLACE CALLBACKS: " +
+        replaceCount
+    );
+
+    log(
+        "POP EVENTS: " +
+        popCount
+    );
+
     log(
         "EXCEPTIONS: " +
         exceptions
     );
+
     log(
         "ANOMALIES: " +
         anomalies
