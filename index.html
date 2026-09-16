@@ -1,37 +1,33 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V33.1 SSV UAF Crash Detector</title>
+<title>PS5 13.60 - V34 Popover Removal Crash Probe</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
     font:15px monospace;
-    padding:18px
+    padding:18px;
 }
 button {
     font:18px monospace;
-    padding:10px 18px
+    padding:10px 18px;
 }
 #status {
+    margin:15px 0;
     padding:10px;
     border:1px solid #555;
-    margin:15px 0
 }
 pre {
     white-space:pre-wrap;
-    word-break:break-word
-}
-input,.focusTarget {
-    position:absolute;
-    left:-5000px
+    word-break:break-word;
 }
 </style>
 
-<h2>PS5 13.60 — V33.1</h2>
-<div>SSV lifetime / natural-crash detector</div>
+<h2>PS5 13.60 — V34</h2>
+<div>Popover removal / style invalidation crash probe</div>
 
-<p><button id="run">RUN V33.1</button></p>
+<p><button id="run">RUN V34</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -40,555 +36,751 @@ input,.focusTarget {
 "use strict";
 
 /*
- * V33.1
+ * V34
  *
- * SerializedScriptValue lifetime diagnostic.
+ * Based on WebKit bug 301879:
  *
- * Goal:
- * Detect a naturally observable crash or state/lifetime
- * inconsistency around:
+ * "Fix crash in style invalidation when element
+ *  has no parent during removal"
  *
- * same-document traversal
- *      ->
- * focus transition / blur
- *      ->
- * replaceState()
+ * Upstream regression:
+ * fast/dom/Element/
+ * nth-child-of-popover-open-crash.html
  *
- * Deliberately DOES NOT:
- *   reclaim freed native objects
- *   spray the heap
- *   disclose addresses
- *   construct arbitrary read/write
- *   execute native code
+ * Reported cause:
+ * hidePopoverInternal() could trigger style
+ * invalidation during removal after parentNode
+ * had become null.
+ *
+ * Browser crash/regression probe only.
  */
 
-const logBox = document.querySelector("#log");
-const statusBox = document.querySelector("#status");
-const runButton = document.querySelector("#run");
+const out =
+    document.querySelector("#log");
 
-let anomalies = 0;
+const statusBox =
+    document.querySelector("#status");
+
+const button =
+    document.querySelector("#run");
+
+let pass = 0;
 let exceptions = 0;
-let completed = 0;
+let anomalies = 0;
+let unsupported = 0;
 
-function log(x) {
-    logBox.textContent += x + "\n";
-    console.log(x);
+function log(s) {
+    out.textContent += s + "\n";
+    console.log(s);
 }
 
-function checkpoint(x) {
+function cp(s) {
+
     try {
         localStorage.setItem(
-            "PS5_V331_CHECKPOINT",
-            x
+            "PS5_V34_CP",
+            s
         );
     } catch (_) {}
 
-    log("[CP] " + x);
+    log("[CP] " + s);
+}
+
+function good(name) {
+    pass++;
+    log("[PASS] " + name);
+}
+
+function bad(name, why) {
+    anomalies++;
+
+    log(
+        "[ANOMALY] " +
+        name +
+        " :: " +
+        why
+    );
+}
+
+function caught(name, e) {
+    exceptions++;
+
+    log(
+        "[EXCEPTION] " +
+        name +
+        " :: " +
+        e
+    );
 }
 
 function delay(ms) {
     return new Promise(
-        resolve => setTimeout(resolve, ms)
+        r => setTimeout(r, ms)
     );
 }
 
-function stateInfo(x) {
+function forceLayout(node) {
 
     try {
-
-        if (!x)
-            return String(x);
-
-        return JSON.stringify({
-            marker:x.marker,
-            run:x.run,
-            size:
-                typeof x.data === "string"
-                ? x.data.length
-                : -1,
-            value:
-                x.nested &&
-                x.nested.value
-        });
-
+        return node.offsetHeight;
     } catch(e) {
-
-        return "STATE_ERROR:" + e.name;
+        return -1;
     }
 }
 
-function makeState(
-    marker,
-    run,
-    size,
-    value
-) {
 
-    return {
-        marker,
-        run,
-        data:"X".repeat(size),
+/* ==============================
+   A — CAPABILITY
+   ============================== */
 
-        nested:{
-            value,
-            text:"V331"
-        },
+async function testA() {
 
-        array:[
-            run,
-            run + 1,
-            run + 2,
-            run + 3
-        ]
-    };
-}
+    const name =
+        "A_POPOVER_CAPABILITY";
 
-
-/*
- * Each case performs only one traversal.
- *
- * We vary serialized-state size rather than
- * performing allocator manipulation.
- */
-
-async function runCase(
-    number,
-    size
-) {
-
-    const prefix =
-        "CASE_" + number;
-
-    checkpoint(
-        prefix + ":CREATE"
-    );
-
-    const input =
-        document.createElement("input");
-
-    const target =
-        document.createElement("div");
-
-    target.tabIndex = -1;
-    target.className = "focusTarget";
-
-    document.body.appendChild(input);
-    document.body.appendChild(target);
-
-    const original =
-        makeState(
-            "ORIGINAL",
-            number,
-            size,
-            0x1000 + number
-        );
-
-    const second =
-        makeState(
-            "SECOND",
-            number,
-            size,
-            0x2000 + number
-        );
-
-    const replacement =
-        makeState(
-            "REPLACEMENT",
-            number,
-            size,
-            0x3000 + number
-        );
-
-    let blurCount = 0;
-    let popCount = 0;
-    let replacementReturned = false;
-    let eventState = null;
-
-    function blurHandler() {
-
-        blurCount++;
-
-        checkpoint(
-            prefix +
-            ":BLUR_ENTER"
-        );
-
-        log(
-            "[" + prefix +
-            "] before replace = " +
-            stateInfo(history.state)
-        );
-
-        try {
-
-            checkpoint(
-                prefix +
-                ":BEFORE_REPLACE"
-            );
-
-            history.replaceState(
-                replacement,
-                "",
-                location.href
-            );
-
-            replacementReturned = true;
-
-            checkpoint(
-                prefix +
-                ":AFTER_REPLACE"
-            );
-
-            log(
-                "[" + prefix +
-                "] after replace = " +
-                stateInfo(history.state)
-            );
-
-        } catch(e) {
-
-            exceptions++;
-
-            log(
-                "[" + prefix +
-                "] replace exception: " +
-                e
-            );
-        }
-
-        checkpoint(
-            prefix +
-            ":BLUR_EXIT"
-        );
-    }
-
-    input.addEventListener(
-        "blur",
-        blurHandler,
-        {once:true}
-    );
-
-    const popPromise =
-        new Promise(resolve => {
-
-            function handler(e) {
-
-                window.removeEventListener(
-                    "popstate",
-                    handler
-                );
-
-                popCount++;
-
-                eventState =
-                    e.state;
-
-                checkpoint(
-                    prefix +
-                    ":POPSTATE"
-                );
-
-                log(
-                    "[" + prefix +
-                    "] event.state = " +
-                    stateInfo(e.state)
-                );
-
-                log(
-                    "[" + prefix +
-                    "] history.state = " +
-                    stateInfo(history.state)
-                );
-
-                resolve();
-            }
-
-            window.addEventListener(
-                "popstate",
-                handler
-            );
-        });
+    cp(name + ":START");
 
     try {
 
-        checkpoint(
-            prefix +
-            ":BASE_STATE"
-        );
+        const el =
+            document.createElement("div");
 
-        history.replaceState(
-            original,
-            "",
-            "#v331-" +
-            number +
-            "-base"
-        );
-
-        checkpoint(
-            prefix +
-            ":PUSH_STATE"
-        );
-
-        history.pushState(
-            second,
-            "",
-            "#v331-" +
-            number +
-            "-second"
-        );
-
-        input.focus();
-
-        await delay(40);
-
-        checkpoint(
-            prefix +
-            ":BEFORE_BACK"
-        );
-
-        history.back();
-
-        checkpoint(
-            prefix +
-            ":BACK_RETURNED"
-        );
-
-        /*
-         * Trigger the focus transition which
-         * produces the blur callback.
-         */
-
-        target.focus();
-
-        checkpoint(
-            prefix +
-            ":FOCUS_CHANGED"
-        );
-
-        await Promise.race([
-            popPromise,
-            delay(1500)
-        ]);
-
-        checkpoint(
-            prefix +
-            ":VERIFY"
+        log(
+            "[A] popover property=" +
+            ("popover" in el)
         );
 
         log(
-            "[" + prefix +
-            "] blur=" +
-            blurCount +
-            " pop=" +
-            popCount +
-            " replaceReturned=" +
-            replacementReturned
+            "[A] showPopover=" +
+            typeof el.showPopover
         );
 
-        /*
-         * Check the ordinary JS objects themselves.
-         */
-
-        if (
-            original.marker !== "ORIGINAL" ||
-            original.data.length !== size ||
-            original.nested.value !==
-                0x1000 + number
-        ) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " original JS object changed"
-            );
-        }
-
-        if (
-            replacement.marker !==
-                "REPLACEMENT" ||
-            replacement.data.length !== size
-        ) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " replacement JS object changed"
-            );
-        }
-
-        if (blurCount !== 1) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " blurCount=" +
-                blurCount
-            );
-        }
-
-        if (!replacementReturned) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " replaceState did not return"
-            );
-        }
-
-        if (popCount !== 1) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " popCount=" +
-                popCount
-            );
-        }
-
-        if (
-            eventState &&
-            typeof eventState.marker
-            !== "string"
-        ) {
-
-            anomalies++;
-
-            log(
-                "[ANOMALY] " +
-                prefix +
-                " malformed event.state"
-            );
-        }
-
-        completed++;
-
-        checkpoint(
-            prefix +
-            ":COMPLETE"
+        log(
+            "[A] hidePopover=" +
+            typeof el.hidePopover
         );
+
+        log(
+            "[A] togglePopover=" +
+            typeof el.togglePopover
+        );
+
+        if (
+            typeof el.showPopover
+            !== "function"
+        ) {
+
+            unsupported++;
+
+            log(
+                "[A] Popover API unavailable"
+            );
+
+            cp(
+                name +
+                ":UNSUPPORTED"
+            );
+
+            return false;
+        }
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+        return true;
 
     } catch(e) {
 
-        exceptions++;
+        caught(name, e);
+
+        return false;
+    }
+}
+
+
+/* ==============================
+   B — BASIC POPOVER
+   ============================== */
+
+async function testB() {
+
+    const name =
+        "B_BASIC_POPOVER";
+
+    cp(name + ":CREATE");
+
+    let el;
+
+    try {
+
+        el =
+            document.createElement("div");
+
+        el.popover = "manual";
+
+        el.textContent =
+            "V34 basic popover";
+
+        document.body.appendChild(el);
+
+        cp(name + ":SHOW");
+
+        el.showPopover();
+
+        forceLayout(el);
 
         log(
-            "[EXCEPTION] " +
-            prefix +
-            " :: " +
-            e
+            "[B] :popover-open=" +
+            el.matches(":popover-open")
         );
 
-        checkpoint(
-            prefix +
-            ":EXCEPTION"
+        cp(name + ":HIDE");
+
+        el.hidePopover();
+
+        forceLayout(el);
+
+        log(
+            "[B] after hide=" +
+            el.matches(":popover-open")
         );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
 
     } finally {
 
         try {
-            input.remove();
-            target.remove();
+            el.remove();
         } catch (_) {}
     }
 }
 
 
+/* ==============================
+   C — REMOVE OPEN POPOVER
+   ============================== */
+
+async function testC() {
+
+    const name =
+        "C_REMOVE_OPEN_POPOVER";
+
+    cp(name + ":CREATE");
+
+    let host;
+    let pop;
+
+    try {
+
+        host =
+            document.createElement("div");
+
+        pop =
+            document.createElement("div");
+
+        pop.popover = "manual";
+
+        pop.textContent =
+            "V34-C";
+
+        host.appendChild(pop);
+
+        document.body.appendChild(host);
+
+        pop.showPopover();
+
+        forceLayout(pop);
+
+        cp(name + ":OPEN");
+
+        log(
+            "[C] open=" +
+            pop.matches(":popover-open")
+        );
+
+        cp(name + ":REMOVE");
+
+        pop.remove();
+
+        cp(name + ":AFTER_REMOVE");
+
+        log(
+            "[C] connected=" +
+            pop.isConnected
+        );
+
+        log(
+            "[C] parent=" +
+            pop.parentNode
+        );
+
+        /*
+         * Ordinary retained-wrapper reads.
+         */
+
+        log(
+            "[C] text=" +
+            pop.textContent
+        );
+
+        await delay(50);
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        try {
+            host.remove();
+        } catch (_) {}
+    }
+}
+
+
+/* ==============================
+   D — outerText REMOVAL
+
+   This is the important upstream condition.
+   ============================== */
+
+async function testD() {
+
+    const name =
+        "D_OUTERTEXT_OPEN_POPOVER";
+
+    cp(name + ":CREATE");
+
+    let host;
+
+    try {
+
+        host =
+            document.createElement("div");
+
+        /*
+         * nth-child dependency intentionally
+         * included because the upstream test
+         * specifically exercises nth-child
+         * style invalidation.
+         */
+
+        const style =
+            document.createElement("style");
+
+        style.textContent = `
+            #v34-host > :nth-child(1) {
+                padding: 1px;
+            }
+
+            #v34-host > :nth-child(2) {
+                margin: 1px;
+            }
+
+            #v34-host > :popover-open {
+                border-width: 1px;
+                border-style: solid;
+            }
+        `;
+
+        document.head.appendChild(style);
+
+        host.id = "v34-host";
+
+        const first =
+            document.createElement("div");
+
+        first.textContent =
+            "first";
+
+        const pop =
+            document.createElement("div");
+
+        pop.popover = "manual";
+
+        pop.textContent =
+            "V34 TARGET";
+
+        const third =
+            document.createElement("div");
+
+        third.textContent =
+            "third";
+
+        host.appendChild(first);
+        host.appendChild(pop);
+        host.appendChild(third);
+
+        document.body.appendChild(host);
+
+        forceLayout(host);
+
+        cp(name + ":SHOW");
+
+        pop.showPopover();
+
+        forceLayout(host);
+
+        log(
+            "[D] open=" +
+            pop.matches(":popover-open")
+        );
+
+        log(
+            "[D] parent before=" +
+            (
+                pop.parentNode
+                ? pop.parentNode.nodeName
+                : "null"
+            )
+        );
+
+        /*
+         * Critical transition.
+
+         * Setting outerText removes/replaces the
+         * element. WebKit bug 301879 describes
+         * hidePopoverInternal being entered while
+         * this removal is occurring.
+         */
+
+        cp(
+            name +
+            ":BEFORE_OUTERTEXT"
+        );
+
+        pop.outerText =
+            "V34 replacement text";
+
+        cp(
+            name +
+            ":AFTER_OUTERTEXT"
+        );
+
+        log(
+            "[D] connected after=" +
+            pop.isConnected
+        );
+
+        log(
+            "[D] parent after=" +
+            pop.parentNode
+        );
+
+        /*
+         * Trigger normal style/layout processing
+         * after the removal.
+         */
+
+        cp(
+            name +
+            ":BEFORE_LAYOUT"
+        );
+
+        const h =
+            forceLayout(host);
+
+        cp(
+            name +
+            ":AFTER_LAYOUT"
+        );
+
+        log(
+            "[D] host height=" +
+            h
+        );
+
+        log(
+            "[D] child count=" +
+            host.childNodes.length
+        );
+
+        await delay(100);
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+        style.remove();
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        try {
+            host.remove();
+        } catch (_) {}
+    }
+}
+
+
+/* ==============================
+   E — parent outerText
+   ============================== */
+
+async function testE() {
+
+    const name =
+        "E_PARENT_OUTERTEXT";
+
+    cp(name + ":CREATE");
+
+    let wrapper;
+
+    try {
+
+        wrapper =
+            document.createElement("div");
+
+        const parent =
+            document.createElement("section");
+
+        const pop =
+            document.createElement("div");
+
+        pop.popover = "manual";
+
+        pop.textContent =
+            "V34-E";
+
+        parent.appendChild(pop);
+        wrapper.appendChild(parent);
+
+        document.body.appendChild(wrapper);
+
+        pop.showPopover();
+
+        forceLayout(wrapper);
+
+        cp(name + ":OPEN");
+
+        log(
+            "[E] open=" +
+            pop.matches(":popover-open")
+        );
+
+        cp(
+            name +
+            ":BEFORE_PARENT_OUTERTEXT"
+        );
+
+        parent.outerText =
+            "parent replaced";
+
+        cp(
+            name +
+            ":AFTER_PARENT_OUTERTEXT"
+        );
+
+        log(
+            "[E] pop connected=" +
+            pop.isConnected
+        );
+
+        log(
+            "[E] parent connected=" +
+            parent.isConnected
+        );
+
+        forceLayout(wrapper);
+
+        await delay(50);
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        try {
+            wrapper.remove();
+        } catch (_) {}
+    }
+}
+
+
+/* ==============================
+   F — callback removal
+   ============================== */
+
+async function testF() {
+
+    const name =
+        "F_TOGGLE_CALLBACK_REMOVAL";
+
+    cp(name + ":CREATE");
+
+    let host;
+
+    try {
+
+        host =
+            document.createElement("div");
+
+        const pop =
+            document.createElement("div");
+
+        pop.popover = "manual";
+
+        pop.textContent =
+            "V34-F";
+
+        host.appendChild(pop);
+
+        document.body.appendChild(host);
+
+        let toggleEvents = 0;
+
+        pop.addEventListener(
+            "toggle",
+            function() {
+
+                toggleEvents++;
+
+                cp(
+                    name +
+                    ":TOGGLE_" +
+                    toggleEvents
+                );
+
+                log(
+                    "[F] toggle #" +
+                    toggleEvents
+                );
+
+                log(
+                    "[F] connected=" +
+                    pop.isConnected
+                );
+            }
+        );
+
+        cp(name + ":SHOW");
+
+        pop.showPopover();
+
+        await delay(50);
+
+        cp(name + ":OUTERTEXT");
+
+        pop.outerText =
+            "V34-F replacement";
+
+        cp(
+            name +
+            ":OUTERTEXT_RETURNED"
+        );
+
+        forceLayout(host);
+
+        await delay(100);
+
+        log(
+            "[F] toggle events=" +
+            toggleEvents
+        );
+
+        log(
+            "[F] retained connected=" +
+            pop.isConnected
+        );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        try {
+            host.remove();
+        } catch (_) {}
+    }
+}
+
+
+/* ============================== */
+
 async function run() {
 
-    runButton.disabled = true;
+    button.disabled = true;
 
-    logBox.textContent = "";
+    out.textContent = "";
 
-    anomalies = 0;
+    pass = 0;
     exceptions = 0;
-    completed = 0;
+    anomalies = 0;
+    unsupported = 0;
 
     statusBox.textContent =
         "STATUS: RUNNING";
 
-    const previous =
+    const old =
         localStorage.getItem(
-            "PS5_V331_CHECKPOINT"
+            "PS5_V34_CP"
         );
 
-    if (previous) {
+    if (old) {
 
         log(
             "PREVIOUS CHECKPOINT: " +
-            previous
+            old
         );
 
         log("");
     }
 
-    log("PS5 13.60 — V33.1");
-    log("SSV LIFETIME / NATURAL CRASH DETECTOR");
-    log(navigator.userAgent);
-    log("");
-
-    /*
-     * A small matrix of ordinary serialized-state
-     * sizes. This is intentionally NOT a heap spray.
-     */
-
-    const sizes = [
-        1024,
-        4096,
-        16384,
-        65536
-    ];
-
-    for (
-        let i = 0;
-        i < sizes.length;
-        i++
-    ) {
-
-        log("");
-        log(
-            "=== CASE " +
-            (i + 1) +
-            " / size " +
-            sizes[i] +
-            " ==="
-        );
-
-        await runCase(
-            i + 1,
-            sizes[i]
-        );
-
-        /*
-         * Avoid History API rate limiting.
-         */
-
-        await delay(800);
-    }
-
-    checkpoint(
-        "V33.1:COMPLETE"
-    );
-
-    log("");
-    log("============================");
-    log("V33.1 RESULT");
-    log("============================");
-
+    log("PS5 13.60 — V34");
     log(
-        "CASES COMPLETED: " +
-        completed +
-        "/4"
+        "Popover Removal Crash Probe"
     );
+
+    log("");
+
+    log(navigator.userAgent);
+
+    log("");
+
+    const supported =
+        await testA();
+
+    if (supported) {
+
+        await testB();
+        await testC();
+        await testD();
+        await testE();
+        await testF();
+
+        cp("V34:COMPLETE");
+    }
+
+    log("");
+    log("============================");
+    log("V34 RESULT");
+    log("============================");
+
+    log("PASS: " + pass);
 
     log(
         "EXCEPTIONS: " +
@@ -600,15 +792,34 @@ async function run() {
         anomalies
     );
 
+    log(
+        "UNSUPPORTED: " +
+        unsupported
+    );
+
     log("============================");
 
-    statusBox.textContent =
-        exceptions || anomalies
-        ? "STATUS: CHECK RESULT"
-        : "STATUS: NORMAL";
+    if (unsupported) {
 
-    runButton.disabled = false;
+        statusBox.textContent =
+            "STATUS: UNSUPPORTED";
+
+    } else if (
+        exceptions ||
+        anomalies
+    ) {
+
+        statusBox.textContent =
+            "STATUS: CHECK RESULT";
+
+    } else {
+
+        statusBox.textContent =
+            "STATUS: NORMAL";
+    }
+
+    button.disabled = false;
 }
 
-runButton.onclick = run;
+button.onclick = run;
 </script>
