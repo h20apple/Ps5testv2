@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 WebKit V12 Probe</title>
+<title>PS5 13.60 V13 WebKit Verification</title>
 
 <style>
 body {
@@ -11,586 +11,566 @@ body {
     font:16px monospace;
     padding:18px;
 }
-button, select {
+button {
     font:16px monospace;
-    padding:9px;
-    margin:4px;
+    padding:10px;
+    margin:5px;
 }
 #log {
     background:#17233a;
     padding:14px;
-    margin-top:10px;
+    margin-top:12px;
     white-space:pre-wrap;
 }
-.ok   { color:#59ff7a; }
-.bad  { color:#ff6868; }
+.ok { color:#59ff7a; }
+.bad { color:#ff6868; }
 .warn { color:#ffd166; }
 .info { color:#63caff; }
 
-#sandbox {
+#testarea {
     position:absolute;
-    left:-20000px;
-    top:0;
+    left:-10000px;
+    top:-10000px;
 }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 WebKit 13.60 — V12 Trigger Probe</h2>
+<h2>PS5 13.60 — V13 WebKit Verification</h2>
 
-<select id="runs">
-    <option value="10">10 runs</option>
-    <option value="100" selected>100 runs</option>
-    <option value="500">500 runs</option>
-</select>
+<button onclick="start()">RUN V13</button>
+<button onclick="replay()">REPLAY LAST PHASE</button>
+<button onclick="resetCP()">RESET CHECKPOINT</button>
 
-<button onclick="runAll()">RUN ALL</button>
-<button onclick="replay()">REPLAY CHECKPOINT</button>
-<button onclick="stopRun()">STOP</button>
-<button onclick="clearLog()">CLEAR</button>
-
-<div id="sandbox"></div>
 <div id="log"></div>
+<div id="testarea"></div>
 
 <script>
 "use strict";
 
 const logBox = document.getElementById("log");
-const sandbox = document.getElementById("sandbox");
+const area = document.getElementById("testarea");
 
-let stopping = false;
+const KEY = "PS5_V13_CHECKPOINT";
 
 let stats = {
-    pass:0,
-    fail:0,
-    exception:0
+    pass: 0,
+    fail: 0,
+    exception: 0
 };
 
-function log(s, cls="") {
+function log(msg, cls="") {
     const d = document.createElement("div");
-    d.textContent = s;
+    d.textContent = msg;
     d.className = cls;
     logBox.appendChild(d);
-    window.scrollTo(0, document.body.scrollHeight);
+
+    window.scrollTo(
+        0,
+        document.body.scrollHeight
+    );
 }
 
-function clearLog() {
-    logBox.innerHTML = "";
-}
+function checkpoint(test, phase, iteration) {
 
-function stopRun() {
-    stopping = true;
-    log("STOP REQUESTED", "warn");
-}
-
-/* ---------------------------
-   Persistent checkpoint
----------------------------- */
-
-function saveCP(test, iteration, phase, state="RUNNING") {
+    const cp = {
+        version: "V13",
+        test,
+        phase,
+        iteration,
+        state: "RUNNING",
+        time: Date.now()
+    };
 
     try {
         localStorage.setItem(
-            "ps5-v12-cp",
+            KEY,
+            JSON.stringify(cp)
+        );
+    } catch(e) {}
+}
+
+function completed() {
+
+    try {
+        localStorage.setItem(
+            KEY,
             JSON.stringify({
-                test,
-                iteration,
-                phase,
-                state,
+                version:"V13",
+                state:"COMPLETE",
                 time:Date.now()
             })
         );
     } catch(e) {}
 }
 
-function getCP() {
+function previousCrash() {
 
     try {
 
-        const s =
-            localStorage.getItem(
-                "ps5-v12-cp"
+        const raw =
+            localStorage.getItem(KEY);
+
+        if (!raw)
+            return;
+
+        const cp =
+            JSON.parse(raw);
+
+        if (cp.state === "RUNNING") {
+
+            log(
+                "*****************************",
+                "bad"
             );
 
-        return s ?
-            JSON.parse(s) :
-            null;
+            log(
+                "PREVIOUS RUN DID NOT COMPLETE",
+                "bad"
+            );
 
-    } catch(e) {
+            log(
+                "TEST: " + cp.test,
+                "bad"
+            );
 
-        return null;
-    }
+            log(
+                "PHASE: " + cp.phase,
+                "bad"
+            );
+
+            log(
+                "ITERATION: " +
+                cp.iteration,
+                "bad"
+            );
+
+            log(
+                "*****************************",
+                "bad"
+            );
+        }
+
+    } catch(e) {}
 }
 
-function showPrevious() {
+function resetCP() {
 
-    const c = getCP();
-
-    if (!c || c.state !== "RUNNING")
-        return;
+    localStorage.removeItem(KEY);
 
     log(
-        "********************************",
-        "bad"
-    );
-
-    log(
-        "PREVIOUS EXECUTION INCOMPLETE",
-        "bad"
-    );
-
-    log("TEST: " + c.test, "bad");
-    log("ITERATION: " + c.iteration, "bad");
-    log("PHASE: " + c.phase, "bad");
-
-    log(
-        "********************************",
-        "bad"
+        "Checkpoint cleared.",
+        "warn"
     );
 }
 
-/* ---------------------------
-   Capability fingerprint
----------------------------- */
-
-function capabilities() {
-
-    log("CAPABILITIES", "info");
-
-    log(
-        "UA: " +
-        navigator.userAgent
+function delay() {
+    return new Promise(
+        r => setTimeout(r,0)
     );
-
-    log(
-        "ArrayBuffer: " +
-        typeof ArrayBuffer
-    );
-
-    log(
-        "DataView: " +
-        typeof DataView
-    );
-
-    log(
-        "BigInt: " +
-        typeof BigInt
-    );
-
-    log(
-        "FontFace: " +
-        typeof FontFace
-    );
-
-    log(
-        "Worker: " +
-        typeof Worker
-    );
-
-    log(
-        "WebAssembly: " +
-        typeof WebAssembly
-    );
-
-    log("");
 }
 
-/* ===========================
-   TEST 1
-   Typed-array lifetime
-=========================== */
+/* =========================================
+   STATE/LIFETIME TEST
+========================================= */
 
-async function typedLifetime(i) {
+async function stateLifetime(iteration) {
 
-    saveCP(
-        "typedLifetime",
-        i,
-        "allocate"
+    checkpoint(
+        "stateLifetime",
+        "create",
+        iteration
     );
 
-    const buffer =
-        new ArrayBuffer(0x4000);
+    const root =
+        document.createElement("div");
 
-    const a =
-        new Uint8Array(buffer);
+    const child =
+        document.createElement("span");
 
-    const b =
-        new Uint32Array(buffer);
+    child.textContent =
+        "state-" + iteration;
 
-    const dv =
-        new DataView(buffer);
+    root.appendChild(child);
+    area.appendChild(root);
 
-    saveCP(
-        "typedLifetime",
-        i,
-        "write"
+    checkpoint(
+        "stateLifetime",
+        "retain",
+        iteration
     );
 
-    for (let x=0; x<256; x++)
-        a[x] = (x+i) & 255;
+    const retained = child;
 
-    dv.setUint32(
-        0x100,
-        0x41424344,
-        true
+    checkpoint(
+        "stateLifetime",
+        "detach",
+        iteration
     );
 
-    saveCP(
-        "typedLifetime",
-        i,
-        "verify"
+    root.remove();
+
+    checkpoint(
+        "stateLifetime",
+        "post-detach-mutation",
+        iteration
     );
 
-    if (
-        dv.getUint32(
-            0x100,
-            true
-        ) !== 0x41424344
-    )
-        return false;
+    retained.textContent =
+        "retained-" + iteration;
 
-    for (let x=0; x<64; x++) {
-        const n = b[x];
-        void n;
-    }
-
-    return true;
+    return (
+        retained.textContent ===
+        "retained-" + iteration
+    );
 }
 
-/* ===========================
-   TEST 2
-   DOM wrapper lifetime
-=========================== */
+/* =========================================
+   RANGE STATE TEST
+========================================= */
 
-async function wrapperLifetime(i) {
+async function rangeState(iteration) {
 
-    saveCP(
-        "wrapperLifetime",
-        i,
-        "create"
+    checkpoint(
+        "rangeState",
+        "create",
+        iteration
+    );
+
+    const root =
+        document.createElement("div");
+
+    const text =
+        document.createTextNode(
+            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+
+    root.appendChild(text);
+    area.appendChild(root);
+
+    const range =
+        document.createRange();
+
+    range.setStart(text,4);
+    range.setEnd(text,24);
+
+    checkpoint(
+        "rangeState",
+        "tree-mutation",
+        iteration
+    );
+
+    text.deleteData(5,10);
+
+    checkpoint(
+        "rangeState",
+        "detach-tree",
+        iteration
+    );
+
+    root.remove();
+
+    checkpoint(
+        "rangeState",
+        "range-read",
+        iteration
+    );
+
+    const result =
+        range.toString();
+
+    return typeof result === "string";
+}
+
+/* =========================================
+   DOCUMENT LIFETIME TEST
+========================================= */
+
+async function documentState(iteration) {
+
+    checkpoint(
+        "documentState",
+        "frame-create",
+        iteration
+    );
+
+    const f =
+        document.createElement("iframe");
+
+    area.appendChild(f);
+
+    await delay();
+
+    const d =
+        f.contentDocument;
+
+    if (!d)
+        throw new Error(
+            "No iframe document"
+        );
+
+    const retained =
+        d.createElement("div");
+
+    retained.textContent =
+        "before";
+
+    d.body.appendChild(retained);
+
+    checkpoint(
+        "documentState",
+        "document-replace",
+        iteration
+    );
+
+    d.open();
+
+    d.write(
+        "<!doctype html>" +
+        "<html><body>" +
+        "replacement" +
+        "</body></html>"
+    );
+
+    d.close();
+
+    checkpoint(
+        "documentState",
+        "old-wrapper-access",
+        iteration
+    );
+
+    retained.textContent =
+        "after";
+
+    const result =
+        retained.textContent;
+
+    checkpoint(
+        "documentState",
+        "frame-remove",
+        iteration
+    );
+
+    f.remove();
+
+    return result === "after";
+}
+
+/* =========================================
+   EVENT RE-ENTRY TEST
+========================================= */
+
+async function eventState(iteration) {
+
+    checkpoint(
+        "eventState",
+        "create",
+        iteration
     );
 
     const outer =
         document.createElement("div");
 
-    const inner =
-        document.createElement("span");
+    const target =
+        document.createElement("button");
 
-    inner.textContent =
-        "wrapper-" + i;
+    outer.appendChild(target);
+    area.appendChild(outer);
 
-    outer.appendChild(inner);
-    sandbox.appendChild(outer);
+    let count = 0;
 
-    saveCP(
-        "wrapperLifetime",
-        i,
-        "detach"
+    target.addEventListener(
+        "v13",
+        function handler() {
+
+            checkpoint(
+                "eventState",
+                "callback-enter",
+                iteration
+            );
+
+            count++;
+
+            outer.remove();
+
+            target.textContent =
+                "removed";
+
+            checkpoint(
+                "eventState",
+                "callback-after-remove",
+                iteration
+            );
+        }
     );
 
-    outer.remove();
-
-    saveCP(
-        "wrapperLifetime",
-        i,
-        "mutate-detached"
+    checkpoint(
+        "eventState",
+        "dispatch",
+        iteration
     );
 
-    inner.textContent =
-        "detached-" + i;
-
-    outer.appendChild(
-        document.createTextNode("x")
+    target.dispatchEvent(
+        new Event(
+            "v13",
+            {bubbles:true}
+        )
     );
 
-    return (
-        inner.textContent ===
-        "detached-" + i
-    );
+    return count === 1;
 }
 
-/* ===========================
-   TEST 3
-   Document replacement
-=========================== */
+/* =========================================
+   FONT / STYLE LIFETIME
+========================================= */
 
-async function documentLifetime(i) {
-
-    saveCP(
-        "documentLifetime",
-        i,
-        "iframe"
-    );
-
-    const frame =
-        document.createElement("iframe");
-
-    sandbox.appendChild(frame);
-
-    await new Promise(
-        r => setTimeout(r,0)
-    );
-
-    const doc =
-        frame.contentDocument;
-
-    if (!doc) {
-        frame.remove();
-        return false;
-    }
-
-    const retained =
-        doc.createElement("div");
-
-    retained.textContent =
-        "old-" + i;
-
-    doc.body.appendChild(retained);
-
-    saveCP(
-        "documentLifetime",
-        i,
-        "replace-document"
-    );
-
-    doc.open();
-
-    doc.write(
-        "<!doctype html><body>" +
-        "<p>replacement</p>"
-    );
-
-    doc.close();
-
-    saveCP(
-        "documentLifetime",
-        i,
-        "retained-wrapper"
-    );
-
-    retained.textContent =
-        "after-" + i;
-
-    const result =
-        retained.textContent;
-
-    saveCP(
-        "documentLifetime",
-        i,
-        "remove-frame"
-    );
-
-    frame.remove();
-
-    return result === "after-" + i;
-}
-
-/* ===========================
-   TEST 4
-   Range lifetime
-=========================== */
-
-async function rangeLifetime(i) {
-
-    saveCP(
-        "rangeLifetime",
-        i,
-        "create"
-    );
-
-    const host =
-        document.createElement("div");
-
-    const text =
-        document.createTextNode(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        );
-
-    host.appendChild(text);
-    sandbox.appendChild(host);
-
-    const range =
-        document.createRange();
-
-    range.setStart(text, 3);
-    range.setEnd(text, 20);
-
-    saveCP(
-        "rangeLifetime",
-        i,
-        "remove-tree"
-    );
-
-    host.remove();
-
-    saveCP(
-        "rangeLifetime",
-        i,
-        "mutate"
-    );
-
-    text.data =
-        "abcdefghijklmnopqrstuvwxyz";
-
-    saveCP(
-        "rangeLifetime",
-        i,
-        "inspect"
-    );
-
-    const value =
-        range.toString();
-
-    return (
-        typeof value === "string"
-    );
-}
-
-/* ===========================
-   TEST 5
-   Font object lifecycle
-=========================== */
-
-async function fontLifetime(i) {
+async function fontState(iteration) {
 
     if (typeof FontFace !== "function")
         return true;
 
-    saveCP(
-        "fontLifetime",
-        i,
-        "construct"
+    checkpoint(
+        "fontState",
+        "font-create",
+        iteration
     );
 
-    const face =
+    const name =
+        "V13_" + iteration;
+
+    const font =
         new FontFace(
-            "V12Font" + i,
+            name,
             "local(Arial)"
         );
 
-    saveCP(
-        "fontLifetime",
-        i,
-        "add"
+    checkpoint(
+        "fontState",
+        "font-add",
+        iteration
     );
 
-    document.fonts.add(face);
+    document.fonts.add(font);
 
     const e =
         document.createElement("span");
 
     e.style.fontFamily =
-        "V12Font" + i;
+        name;
 
     e.textContent =
-        "font-" + i;
+        "V13FONT";
 
-    sandbox.appendChild(e);
+    area.appendChild(e);
 
-    saveCP(
-        "fontLifetime",
-        i,
-        "layout"
+    checkpoint(
+        "fontState",
+        "layout",
+        iteration
     );
 
-    void e.offsetWidth;
+    const width =
+        e.offsetWidth;
 
-    saveCP(
-        "fontLifetime",
-        i,
-        "remove"
+    void width;
+
+    checkpoint(
+        "fontState",
+        "remove-element",
+        iteration
     );
 
     e.remove();
 
-    document.fonts.delete(face);
+    checkpoint(
+        "fontState",
+        "remove-font",
+        iteration
+    );
+
+    document.fonts.delete(font);
 
     return true;
 }
 
-/* ===========================
-   TEST 6
-   Event re-entry/lifetime
-=========================== */
+/* =========================================
+   ARRAY BUFFER INTEGRITY CONTROL
+========================================= */
 
-async function eventLifetime(i) {
+async function memoryControl(iteration) {
 
-    saveCP(
-        "eventLifetime",
-        i,
-        "create"
+    checkpoint(
+        "memoryControl",
+        "allocate",
+        iteration
     );
 
-    const parent =
-        document.createElement("div");
+    const ab =
+        new ArrayBuffer(0x10000);
 
-    const target =
-        document.createElement("button");
+    const u8 =
+        new Uint8Array(ab);
 
-    parent.appendChild(target);
-    sandbox.appendChild(parent);
-
-    let fired = false;
-
-    target.addEventListener(
-        "v12",
-        function() {
-
-            saveCP(
-                "eventLifetime",
-                i,
-                "callback"
-            );
-
-            parent.remove();
-
-            target.textContent =
-                "detached";
-
-            fired = true;
-        }
+    checkpoint(
+        "memoryControl",
+        "pattern-write",
+        iteration
     );
 
-    saveCP(
-        "eventLifetime",
-        i,
-        "dispatch"
+    for (
+        let i=0;
+        i<u8.length;
+        i++
+    ) {
+        u8[i] =
+            (i ^ iteration) & 0xff;
+    }
+
+    checkpoint(
+        "memoryControl",
+        "pattern-check",
+        iteration
     );
 
-    target.dispatchEvent(
-        new Event(
-            "v12",
-            {bubbles:true}
-        )
-    );
+    for (
+        let i=0;
+        i<u8.length;
+        i+=257
+    ) {
 
-    return fired;
+        const expected =
+            (i ^ iteration) & 0xff;
+
+        if (u8[i] !== expected)
+            return false;
+    }
+
+    return true;
 }
 
-/* --------------------------- */
+/* ========================================= */
 
-const tests = [
-    ["typedLifetime", typedLifetime],
-    ["wrapperLifetime", wrapperLifetime],
-    ["documentLifetime", documentLifetime],
-    ["rangeLifetime", rangeLifetime],
-    ["fontLifetime", fontLifetime],
-    ["eventLifetime", eventLifetime]
+const TESTS = [
+    ["stateLifetime", stateLifetime],
+    ["rangeState", rangeState],
+    ["documentState", documentState],
+    ["eventState", eventState],
+    ["fontState", fontState],
+    ["memoryControl", memoryControl]
 ];
 
-async function execute(name, fn, i) {
-
-    saveCP(
-        name,
-        i,
-        "BEGIN"
-    );
+async function runTest(
+    name,
+    fn,
+    iteration
+) {
 
     try {
 
         const result =
-            await fn(i);
+            await fn(iteration);
 
         if (result) {
 
@@ -601,13 +581,12 @@ async function execute(name, fn, i) {
             stats.fail++;
 
             log(
-                "[FAIL] " +
+                "FAIL: " +
                 name +
-                " #" + i,
+                " #" +
+                iteration,
                 "bad"
             );
-
-            stopping = true;
         }
 
     } catch(e) {
@@ -615,35 +594,24 @@ async function execute(name, fn, i) {
         stats.exception++;
 
         log(
-            "[EXCEPTION] " +
+            "EXCEPTION: " +
             name +
-            " #" + i +
-            " : " + e,
+            " #" +
+            iteration +
+            " : " +
+            e,
             "bad"
         );
-
-        stopping = true;
     }
-
-    saveCP(
-        name,
-        i,
-        "COMPLETE",
-        "COMPLETE"
-    );
 }
 
-/* --------------------------- */
+/* ========================================= */
 
-async function runAll() {
+async function start() {
 
-    clearLog();
+    logBox.innerHTML = "";
 
-    showPrevious();
-
-    capabilities();
-
-    stopping = false;
+    previousCrash();
 
     stats = {
         pass:0,
@@ -651,35 +619,33 @@ async function runAll() {
         exception:0
     };
 
-    const runs =
-        Number(
-            document.getElementById(
-                "runs"
-            ).value
-        );
-
     log(
-        "V12 START",
+        "PS5 V13 START",
         "info"
     );
 
     log(
-        "Runs/test: " +
-        runs
+        navigator.userAgent
     );
 
     log("");
 
-    const start =
+    const startTime =
         performance.now();
+
+    /*
+       Intentionally modest.
+
+       We're looking for reproducibility,
+       not memory exhaustion.
+    */
+
+    const RUNS = 100;
 
     for (
         const [name,fn]
-        of tests
+        of TESTS
     ) {
-
-        if (stopping)
-            break;
 
         log(
             ">>> " + name,
@@ -688,105 +654,102 @@ async function runAll() {
 
         for (
             let i=0;
-            i<runs &&
-            !stopping;
+            i<RUNS;
             i++
         ) {
 
-            await execute(
+            await runTest(
                 name,
                 fn,
                 i
             );
 
-            if (i % 10 === 0) {
-
-                log(
-                    name +
-                    " " +
-                    i +
-                    "/" +
-                    runs
-                );
-
-                await new Promise(
-                    r => setTimeout(r,0)
-                );
-            }
+            if ((i % 10) === 0)
+                await delay();
         }
     }
 
-    const runtime =
+    completed();
+
+    const elapsed =
         performance.now() -
-        start;
+        startTime;
 
     log("");
 
     log(
-        "======= V12 RESULT =======",
+        "====== V13 RESULT ======",
         "info"
     );
 
     log(
-        "PASS:       " +
+        "PASS: " +
         stats.pass,
-        "ok"
+        stats.fail === 0 ?
+            "ok" : ""
     );
 
     log(
-        "FAIL:       " +
+        "FAIL: " +
         stats.fail,
         stats.fail ?
-            "bad":"ok"
+            "bad" : "ok"
     );
 
     log(
         "EXCEPTIONS: " +
         stats.exception,
         stats.exception ?
-            "bad":"ok"
+            "bad" : "ok"
     );
 
     log(
-        "RUNTIME:    " +
-        runtime.toFixed(0) +
+        "RUNTIME: " +
+        elapsed.toFixed(0) +
         " ms"
     );
 
     log(
-        "==========================",
+        "========================",
         "info"
     );
 }
 
-/* --------------------------- */
+/* ========================================= */
 
 async function replay() {
 
-    clearLog();
+    let cp;
 
-    const cp =
-        getCP();
+    try {
+        cp =
+            JSON.parse(
+                localStorage.getItem(KEY)
+            );
+    } catch(e) {}
 
-    if (!cp) {
+    if (
+        !cp ||
+        cp.state !== "RUNNING"
+    ) {
 
         log(
-            "No checkpoint.",
+            "No incomplete checkpoint.",
             "warn"
         );
 
         return;
     }
 
-    const entry =
-        tests.find(
-            t => t[0] === cp.test
+    const found =
+        TESTS.find(
+            x => x[0] === cp.test
         );
 
-    if (!entry) {
+    if (!found) {
 
         log(
-            "Unknown checkpoint test.",
+            "Checkpoint test not found.",
             "bad"
         );
 
@@ -794,53 +757,31 @@ async function replay() {
     }
 
     log(
-        "REPLAYING CHECKPOINT",
+        "REPLAYING:",
         "warn"
     );
 
     log(
-        "TEST: " +
-        cp.test
+        cp.test +
+        " / " +
+        cp.phase +
+        " / #" +
+        cp.iteration
     );
 
-    log(
-        "ITERATION: " +
+    await runTest(
+        found[0],
+        found[1],
         cp.iteration
     );
 
     log(
-        "PHASE: " +
-        cp.phase
+        "Replay returned normally.",
+        "ok"
     );
-
-    stopping = false;
-
-    for (
-        let i=0;
-        i<=cp.iteration &&
-        !stopping;
-        i++
-    ) {
-
-        await execute(
-            entry[0],
-            entry[1],
-            i
-        );
-
-        await new Promise(
-            r => setTimeout(r,0)
-        );
-    }
-
-    if (!stopping)
-        log(
-            "Replay completed.",
-            "ok"
-        );
 }
 
-showPrevious();
+previousCrash();
 
 </script>
 </body>
