@@ -2,786 +2,418 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 V13 WebKit Verification</title>
-
+<title>PS5 13.60 V14 SSV Probe</title>
 <style>
-body {
-    background:#101827;
-    color:#eee;
-    font:16px monospace;
-    padding:18px;
+body{
+  background:#101827;color:#eee;
+  font:16px monospace;padding:18px
 }
-button {
-    font:16px monospace;
-    padding:10px;
-    margin:5px;
+button{font:16px monospace;padding:10px;margin:5px}
+#log{
+  background:#17233a;padding:14px;margin-top:12px;
+  white-space:pre-wrap
 }
-#log {
-    background:#17233a;
-    padding:14px;
-    margin-top:12px;
-    white-space:pre-wrap;
-}
-.ok { color:#59ff7a; }
-.bad { color:#ff6868; }
-.warn { color:#ffd166; }
-.info { color:#63caff; }
-
-#testarea {
-    position:absolute;
-    left:-10000px;
-    top:-10000px;
-}
+.ok{color:#59ff7a}.bad{color:#ff6868}
+.warn{color:#ffd166}.info{color:#63caff}
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V13 WebKit Verification</h2>
+<h2>PS5 13.60 — V14 SSV Lifetime Probe</h2>
 
-<button onclick="start()">RUN V13</button>
-<button onclick="replay()">REPLAY LAST PHASE</button>
-<button onclick="resetCP()">RESET CHECKPOINT</button>
+<button onclick="run()">RUN V14</button>
+<button onclick="clearCheckpoint()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
-<div id="testarea"></div>
 
 <script>
 "use strict";
 
 const logBox = document.getElementById("log");
-const area = document.getElementById("testarea");
+const KEY = "PS5_V14_SSV_CP";
 
-const KEY = "PS5_V13_CHECKPOINT";
+let popCount = 0;
+let blurCount = 0;
+let focusCount = 0;
 
-let stats = {
-    pass: 0,
-    fail: 0,
-    exception: 0
-};
-
-function log(msg, cls="") {
-    const d = document.createElement("div");
-    d.textContent = msg;
-    d.className = cls;
-    logBox.appendChild(d);
-
-    window.scrollTo(
-        0,
-        document.body.scrollHeight
-    );
+function log(s,c=""){
+  const d=document.createElement("div");
+  d.textContent=s;
+  d.className=c;
+  logBox.appendChild(d);
 }
 
-function checkpoint(test, phase, iteration) {
-
-    const cp = {
-        version: "V13",
-        test,
-        phase,
-        iteration,
-        state: "RUNNING",
-        time: Date.now()
-    };
-
-    try {
-        localStorage.setItem(
-            KEY,
-            JSON.stringify(cp)
-        );
-    } catch(e) {}
+function cp(phase,extra={}) {
+  try {
+    localStorage.setItem(KEY,JSON.stringify({
+      state:"RUNNING",
+      phase,
+      time:Date.now(),
+      ...extra
+    }));
+  } catch(e){}
 }
 
-function completed() {
-
-    try {
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                version:"V13",
-                state:"COMPLETE",
-                time:Date.now()
-            })
-        );
-    } catch(e) {}
+function done() {
+  try {
+    localStorage.setItem(KEY,JSON.stringify({
+      state:"COMPLETE",
+      time:Date.now()
+    }));
+  } catch(e){}
 }
 
-function previousCrash() {
-
-    try {
-
-        const raw =
-            localStorage.getItem(KEY);
-
-        if (!raw)
-            return;
-
-        const cp =
-            JSON.parse(raw);
-
-        if (cp.state === "RUNNING") {
-
-            log(
-                "*****************************",
-                "bad"
-            );
-
-            log(
-                "PREVIOUS RUN DID NOT COMPLETE",
-                "bad"
-            );
-
-            log(
-                "TEST: " + cp.test,
-                "bad"
-            );
-
-            log(
-                "PHASE: " + cp.phase,
-                "bad"
-            );
-
-            log(
-                "ITERATION: " +
-                cp.iteration,
-                "bad"
-            );
-
-            log(
-                "*****************************",
-                "bad"
-            );
-        }
-
-    } catch(e) {}
-}
-
-function resetCP() {
-
-    localStorage.removeItem(KEY);
-
-    log(
-        "Checkpoint cleared.",
-        "warn"
-    );
-}
-
-function delay() {
-    return new Promise(
-        r => setTimeout(r,0)
-    );
-}
-
-/* =========================================
-   STATE/LIFETIME TEST
-========================================= */
-
-async function stateLifetime(iteration) {
-
-    checkpoint(
-        "stateLifetime",
-        "create",
-        iteration
-    );
-
-    const root =
-        document.createElement("div");
-
-    const child =
-        document.createElement("span");
-
-    child.textContent =
-        "state-" + iteration;
-
-    root.appendChild(child);
-    area.appendChild(root);
-
-    checkpoint(
-        "stateLifetime",
-        "retain",
-        iteration
-    );
-
-    const retained = child;
-
-    checkpoint(
-        "stateLifetime",
-        "detach",
-        iteration
-    );
-
-    root.remove();
-
-    checkpoint(
-        "stateLifetime",
-        "post-detach-mutation",
-        iteration
-    );
-
-    retained.textContent =
-        "retained-" + iteration;
-
-    return (
-        retained.textContent ===
-        "retained-" + iteration
-    );
-}
-
-/* =========================================
-   RANGE STATE TEST
-========================================= */
-
-async function rangeState(iteration) {
-
-    checkpoint(
-        "rangeState",
-        "create",
-        iteration
-    );
-
-    const root =
-        document.createElement("div");
-
-    const text =
-        document.createTextNode(
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        );
-
-    root.appendChild(text);
-    area.appendChild(root);
-
-    const range =
-        document.createRange();
-
-    range.setStart(text,4);
-    range.setEnd(text,24);
-
-    checkpoint(
-        "rangeState",
-        "tree-mutation",
-        iteration
-    );
-
-    text.deleteData(5,10);
-
-    checkpoint(
-        "rangeState",
-        "detach-tree",
-        iteration
-    );
-
-    root.remove();
-
-    checkpoint(
-        "rangeState",
-        "range-read",
-        iteration
-    );
-
-    const result =
-        range.toString();
-
-    return typeof result === "string";
-}
-
-/* =========================================
-   DOCUMENT LIFETIME TEST
-========================================= */
-
-async function documentState(iteration) {
-
-    checkpoint(
-        "documentState",
-        "frame-create",
-        iteration
-    );
-
-    const f =
-        document.createElement("iframe");
-
-    area.appendChild(f);
-
-    await delay();
-
-    const d =
-        f.contentDocument;
-
-    if (!d)
-        throw new Error(
-            "No iframe document"
-        );
-
-    const retained =
-        d.createElement("div");
-
-    retained.textContent =
-        "before";
-
-    d.body.appendChild(retained);
-
-    checkpoint(
-        "documentState",
-        "document-replace",
-        iteration
-    );
-
-    d.open();
-
-    d.write(
-        "<!doctype html>" +
-        "<html><body>" +
-        "replacement" +
-        "</body></html>"
-    );
-
-    d.close();
-
-    checkpoint(
-        "documentState",
-        "old-wrapper-access",
-        iteration
-    );
-
-    retained.textContent =
-        "after";
-
-    const result =
-        retained.textContent;
-
-    checkpoint(
-        "documentState",
-        "frame-remove",
-        iteration
-    );
-
-    f.remove();
-
-    return result === "after";
-}
-
-/* =========================================
-   EVENT RE-ENTRY TEST
-========================================= */
-
-async function eventState(iteration) {
-
-    checkpoint(
-        "eventState",
-        "create",
-        iteration
-    );
-
-    const outer =
-        document.createElement("div");
-
-    const target =
-        document.createElement("button");
-
-    outer.appendChild(target);
-    area.appendChild(outer);
-
-    let count = 0;
-
-    target.addEventListener(
-        "v13",
-        function handler() {
-
-            checkpoint(
-                "eventState",
-                "callback-enter",
-                iteration
-            );
-
-            count++;
-
-            outer.remove();
-
-            target.textContent =
-                "removed";
-
-            checkpoint(
-                "eventState",
-                "callback-after-remove",
-                iteration
-            );
-        }
-    );
-
-    checkpoint(
-        "eventState",
-        "dispatch",
-        iteration
-    );
-
-    target.dispatchEvent(
-        new Event(
-            "v13",
-            {bubbles:true}
-        )
-    );
-
-    return count === 1;
-}
-
-/* =========================================
-   FONT / STYLE LIFETIME
-========================================= */
-
-async function fontState(iteration) {
-
-    if (typeof FontFace !== "function")
-        return true;
-
-    checkpoint(
-        "fontState",
-        "font-create",
-        iteration
-    );
-
-    const name =
-        "V13_" + iteration;
-
-    const font =
-        new FontFace(
-            name,
-            "local(Arial)"
-        );
-
-    checkpoint(
-        "fontState",
-        "font-add",
-        iteration
-    );
-
-    document.fonts.add(font);
-
-    const e =
-        document.createElement("span");
-
-    e.style.fontFamily =
-        name;
-
-    e.textContent =
-        "V13FONT";
-
-    area.appendChild(e);
-
-    checkpoint(
-        "fontState",
-        "layout",
-        iteration
-    );
-
-    const width =
-        e.offsetWidth;
-
-    void width;
-
-    checkpoint(
-        "fontState",
-        "remove-element",
-        iteration
-    );
-
-    e.remove();
-
-    checkpoint(
-        "fontState",
-        "remove-font",
-        iteration
-    );
-
-    document.fonts.delete(font);
-
-    return true;
-}
-
-/* =========================================
-   ARRAY BUFFER INTEGRITY CONTROL
-========================================= */
-
-async function memoryControl(iteration) {
-
-    checkpoint(
-        "memoryControl",
-        "allocate",
-        iteration
-    );
-
-    const ab =
-        new ArrayBuffer(0x10000);
-
-    const u8 =
-        new Uint8Array(ab);
-
-    checkpoint(
-        "memoryControl",
-        "pattern-write",
-        iteration
-    );
-
-    for (
-        let i=0;
-        i<u8.length;
-        i++
-    ) {
-        u8[i] =
-            (i ^ iteration) & 0xff;
+function previous() {
+  try {
+    const x=JSON.parse(localStorage.getItem(KEY));
+    if(x && x.state==="RUNNING"){
+      log("****************************","bad");
+      log("PREVIOUS RUN INCOMPLETE","bad");
+      log("LAST PHASE: "+x.phase,"bad");
+
+      if(x.popCount!==undefined)
+        log("POP COUNT: "+x.popCount,"bad");
+
+      if(x.blurCount!==undefined)
+        log("BLUR COUNT: "+x.blurCount,"bad");
+
+      log("****************************","bad");
     }
-
-    checkpoint(
-        "memoryControl",
-        "pattern-check",
-        iteration
-    );
-
-    for (
-        let i=0;
-        i<u8.length;
-        i+=257
-    ) {
-
-        const expected =
-            (i ^ iteration) & 0xff;
-
-        if (u8[i] !== expected)
-            return false;
-    }
-
-    return true;
+  }catch(e){}
 }
 
-/* ========================================= */
-
-const TESTS = [
-    ["stateLifetime", stateLifetime],
-    ["rangeState", rangeState],
-    ["documentState", documentState],
-    ["eventState", eventState],
-    ["fontState", fontState],
-    ["memoryControl", memoryControl]
-];
-
-async function runTest(
-    name,
-    fn,
-    iteration
-) {
-
-    try {
-
-        const result =
-            await fn(iteration);
-
-        if (result) {
-
-            stats.pass++;
-
-        } else {
-
-            stats.fail++;
-
-            log(
-                "FAIL: " +
-                name +
-                " #" +
-                iteration,
-                "bad"
-            );
-        }
-
-    } catch(e) {
-
-        stats.exception++;
-
-        log(
-            "EXCEPTION: " +
-            name +
-            " #" +
-            iteration +
-            " : " +
-            e,
-            "bad"
-        );
-    }
+function clearCheckpoint(){
+  localStorage.removeItem(KEY);
+  log("Checkpoint cleared.","warn");
 }
 
-/* ========================================= */
+function sleep(ms){
+  return new Promise(r=>setTimeout(r,ms));
+}
 
-async function start() {
+async function waitComplete(){
 
-    logBox.innerHTML = "";
+  if(document.readyState==="complete")
+    return;
 
-    previousCrash();
+  await new Promise(resolve=>{
+    addEventListener("load",resolve,{once:true});
+  });
+}
 
-    stats = {
-        pass:0,
-        fail:0,
-        exception:0
-    };
+/*
+ * V14 intentionally exercises only the
+ * history/focus/popstate lifetime sequence.
+ *
+ * It DOES NOT:
+ *   - free allocator neighbours
+ *   - reclaim an SSV
+ *   - spray matching ArrayBuffers
+ *   - inspect corrupted memory
+ *   - modify SSV fields
+ *   - construct read/write primitives
+ */
 
-    log(
-        "PS5 V13 START",
-        "info"
-    );
+async function run(){
 
-    log(
-        navigator.userAgent
-    );
+  logBox.innerHTML="";
 
-    log("");
+  previous();
 
-    const startTime =
-        performance.now();
+  popCount=0;
+  blurCount=0;
+  focusCount=0;
+
+  log("V14 START","info");
+  log(navigator.userAgent);
+  log("");
+
+  try {
+
+    cp("WAIT_DOCUMENT_COMPLETE");
+
+    await waitComplete();
+
+    log("Document complete","ok");
 
     /*
-       Intentionally modest.
-
-       We're looking for reproducibility,
-       not memory exhaustion.
+       PSFree performs an initial history operation
+       before creating the interesting entries.
     */
 
-    const RUNS = 100;
+    cp("INITIAL_REPLACE_STATE");
 
-    for (
-        const [name,fn]
-        of TESTS
-    ) {
+    history.replaceState(
+      "v14-state0",
+      "",
+      location.pathname
+    );
+
+    /*
+       Create two same-document history entries.
+
+       These cause WebKit to serialize the state
+       values internally.
+    */
+
+    cp("PUSH_STATE_BAR");
+
+    history.pushState(
+      "v14-state1",
+      "",
+      location.pathname+"#v14bar"
+    );
+
+    cp("PUSH_STATE_FOO");
+
+    history.pushState(
+      "v14-state1b",
+      "",
+      location.pathname+"#v14foo"
+    );
+
+    cp("PUSH_STATE_FINAL");
+
+    history.pushState(
+      "v14-state2",
+      "",
+      location.pathname+"#v14final"
+    );
+
+    log("History states created","ok");
+
+    /*
+       Construct the focus targets.
+    */
+
+    cp("CREATE_FOCUS_TARGETS");
+
+    const input=document.createElement("input");
+    const foo=document.createElement("input");
+    const bar=document.createElement("a");
+
+    input.id="v14input";
+    foo.id="v14foo";
+    bar.id="v14bar";
+
+    foo.value="foo";
+    input.value="input";
+
+    bar.href="#v14bar";
+    bar.textContent="bar";
+
+    document.body.appendChild(input);
+    document.body.appendChild(foo);
+    document.body.appendChild(bar);
+
+    input.addEventListener("focus",()=>{
+      focusCount++;
+
+      cp("INPUT_FOCUS",{
+        focusCount,
+        blurCount,
+        popCount
+      });
+
+      log("input focus","info");
+    });
+
+    input.addEventListener("blur",()=>{
+
+      blurCount++;
+
+      cp("INPUT_BLUR",{
+        focusCount,
+        blurCount,
+        popCount
+      });
+
+      log(
+        "input blur #"+blurCount,
+        "info"
+      );
+
+      /*
+       Important boundary:
+
+       The real exploit performs allocator manipulation
+       and ArrayBuffer reclamation around this point.
+
+       V14 deliberately does NONE of that.
+      */
+    });
+
+    foo.addEventListener("focus",()=>{
+
+      focusCount++;
+
+      cp("FOO_FOCUS",{
+        focusCount,
+        blurCount,
+        popCount
+      });
+
+      log("foo focus","info");
+    });
+
+    foo.addEventListener("blur",()=>{
+
+      blurCount++;
+
+      cp("FOO_BLUR",{
+        focusCount,
+        blurCount,
+        popCount
+      });
+
+      log(
+        "foo blur #"+blurCount,
+        "info"
+      );
+    });
+
+    /*
+       Observe the two history transitions.
+    */
+
+    const twoPops=new Promise((resolve,reject)=>{
+
+      const timer=setTimeout(()=>{
+        reject(
+          new Error(
+            "Timed out waiting for popstate"
+          )
+        );
+      },10000);
+
+      function handler(event){
+
+        popCount++;
+
+        cp("POPSTATE_"+popCount,{
+          focusCount,
+          blurCount,
+          popCount
+        });
 
         log(
-            ">>> " + name,
-            "info"
+          "popstate #"+popCount+
+          " state="+String(event.state),
+          "info"
         );
 
-        for (
-            let i=0;
-            i<RUNS;
-            i++
-        ) {
+        if(popCount===1){
 
-            await runTest(
-                name,
-                fn,
-                i
-            );
+          cp("SECOND_HISTORY_BACK",{
+            focusCount,
+            blurCount,
+            popCount
+          });
 
-            if ((i % 10) === 0)
-                await delay();
+          history.back();
+
+        } else if(popCount===2){
+
+          clearTimeout(timer);
+
+          removeEventListener(
+            "popstate",
+            handler
+          );
+
+          resolve();
         }
-    }
+      }
 
-    completed();
+      addEventListener(
+        "popstate",
+        handler
+      );
+    });
 
-    const elapsed =
-        performance.now() -
-        startTime;
+    /*
+       Focus is significant in the original
+       testcase because same-document navigation
+       interacts with focus/blur processing.
+    */
+
+    cp("FOCUS_INPUT");
+
+    input.focus();
+
+    await sleep(0);
+
+    cp("FIRST_HISTORY_BACK",{
+      focusCount,
+      blurCount,
+      popCount
+    });
+
+    log("Calling history.back()","warn");
+
+    history.back();
+
+    await twoPops;
+
+    cp("POST_POPSTATE",{
+      focusCount,
+      blurCount,
+      popCount
+    });
 
     log("");
+    log("History sequence completed","ok");
 
-    log(
-        "====== V13 RESULT ======",
-        "info"
+    /*
+       Exercise the retained JS event/state values,
+       but don't inspect native memory.
+    */
+
+    await sleep(0);
+
+    cp("CLEANUP",{
+      focusCount,
+      blurCount,
+      popCount
+    });
+
+    input.remove();
+    foo.remove();
+    bar.remove();
+
+    history.replaceState(
+      "v14-clean",
+      "",
+      location.pathname
     );
 
-    log(
-        "PASS: " +
-        stats.pass,
-        stats.fail === 0 ?
-            "ok" : ""
-    );
+    done();
 
-    log(
-        "FAIL: " +
-        stats.fail,
-        stats.fail ?
-            "bad" : "ok"
-    );
+    log("");
+    log("====== V14 RESULT ======","info");
+    log("STATUS: NORMAL","ok");
+    log("FOCUS EVENTS: "+focusCount);
+    log("BLUR EVENTS:  "+blurCount);
+    log("POP EVENTS:   "+popCount);
+    log("========================","info");
 
-    log(
-        "EXCEPTIONS: " +
-        stats.exception,
-        stats.exception ?
-            "bad" : "ok"
-    );
+  } catch(e){
 
-    log(
-        "RUNTIME: " +
-        elapsed.toFixed(0) +
-        " ms"
-    );
+    cp("JS_EXCEPTION",{
+      message:String(e),
+      focusCount,
+      blurCount,
+      popCount
+    });
 
-    log(
-        "========================",
-        "info"
-    );
+    log("");
+    log("V14 EXCEPTION","bad");
+    log(String(e),"bad");
+  }
 }
 
-/* ========================================= */
-
-async function replay() {
-
-    let cp;
-
-    try {
-        cp =
-            JSON.parse(
-                localStorage.getItem(KEY)
-            );
-    } catch(e) {}
-
-    if (
-        !cp ||
-        cp.state !== "RUNNING"
-    ) {
-
-        log(
-            "No incomplete checkpoint.",
-            "warn"
-        );
-
-        return;
-    }
-
-    const found =
-        TESTS.find(
-            x => x[0] === cp.test
-        );
-
-    if (!found) {
-
-        log(
-            "Checkpoint test not found.",
-            "bad"
-        );
-
-        return;
-    }
-
-    log(
-        "REPLAYING:",
-        "warn"
-    );
-
-    log(
-        cp.test +
-        " / " +
-        cp.phase +
-        " / #" +
-        cp.iteration
-    );
-
-    await runTest(
-        found[0],
-        found[1],
-        cp.iteration
-    );
-
-    log(
-        "Replay returned normally.",
-        "ok"
-    );
-}
-
-previousCrash();
+previous();
 
 </script>
 </body>
