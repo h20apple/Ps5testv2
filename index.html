@@ -2,579 +2,469 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V18 SSV Lifetime Probe</title>
-
+<title>PS5 13.60 — V19 SSV Crash/Repro Probe</title>
 <style>
-body {
+body{
     background:#101827;
     color:#eee;
     font:16px monospace;
     padding:18px;
 }
-button {
+button,input{
     font:16px monospace;
-    padding:10px;
-    margin:5px;
+    padding:9px;
+    margin:4px;
 }
-#log {
+#log{
     background:#17233a;
     padding:14px;
     margin-top:12px;
     white-space:pre-wrap;
 }
-.ok { color:#59ff7a; }
-.bad { color:#ff6868; }
-.warn { color:#ffd166; }
-.info { color:#63caff; }
-.spacer { height:1800px; }
+.ok{color:#59ff7a}
+.bad{color:#ff6868}
+.warn{color:#ffd166}
+.info{color:#63caff}
+#targetSpace{height:1400px}
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V18 SSV Lifetime Probe</h2>
+<h2>PS5 13.60 — V19 SSV Crash/Repro Probe</h2>
 
-<button onclick="runV18()">RUN V18</button>
-<button onclick="clearCP()">CLEAR CHECKPOINT</button>
+Runs:
+<input id="runs" type="number" value="25" min="1" max="100">
+
+<button onclick="startV19()">RUN V19</button>
+<button onclick="clearCheckpoint()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
 
-<div class="spacer"></div>
-
-<a id="v18target" href="#v18target">
-    V18 fragment target
-</a>
+<div id="targetSpace"></div>
+<a id="v19target">V19 fragment target</a>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V18_CP";
+const KEY = "PS5_V19_CHECKPOINT";
 
 const logBox =
     document.getElementById("log");
 
-let seq = 0;
-let events = [];
+let totalBlur = 0;
+let totalReplace = 0;
+let anomalies = 0;
 
-function log(text, cls="") {
-
-    const d =
-        document.createElement("div");
-
-    d.textContent = text;
+function log(s, cls="") {
+    const d = document.createElement("div");
+    d.textContent = s;
     d.className = cls;
-
     logBox.appendChild(d);
 }
 
-function cp(name, extra="") {
-
-    seq++;
-
-    const entry = {
-        n: seq,
-        name: name,
-        extra: extra,
-        href: location.href,
-        time: performance.now()
-    };
-
-    events.push(entry);
-
+function saveCP(run, phase) {
     try {
         localStorage.setItem(
             KEY,
             JSON.stringify({
-                state:"RUNNING",
-                last:entry,
-                events:events.slice(-50)
-            })
-        );
-    } catch(e) {}
-
-    log(
-        seq + ": " +
-        name +
-        (extra ? " — " + extra : ""),
-        "info"
-    );
-}
-
-function complete() {
-
-    try {
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                state:"COMPLETE",
-                events:events
+                status:"RUNNING",
+                run:run,
+                phase:phase,
+                time:Date.now(),
+                href:location.href
             })
         );
     } catch(e) {}
 }
 
-function clearCP() {
-
-    localStorage.removeItem(KEY);
-
-    log(
-        "Checkpoint cleared.",
-        "warn"
-    );
+function markComplete(runs) {
+    try {
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                status:"COMPLETE",
+                runs:runs,
+                blur:totalBlur,
+                replace:totalReplace,
+                anomalies:anomalies
+            })
+        );
+    } catch(e) {}
 }
 
-function previousRun() {
-
+function showPrevious() {
     try {
-
         const raw =
             localStorage.getItem(KEY);
 
         if (!raw)
             return;
 
-        const data =
+        const cp =
             JSON.parse(raw);
 
-        if (data.state !== "RUNNING")
-            return;
-
-        log(
-            "****************************",
-            "bad"
-        );
-
-        log(
-            "PREVIOUS RUN INCOMPLETE",
-            "bad"
-        );
-
-        if (data.last) {
-
+        if (cp.status === "RUNNING") {
             log(
-                "LAST CHECKPOINT: " +
-                data.last.n +
-                " / " +
-                data.last.name,
+                "********************************",
+                "bad"
+            );
+            log(
+                "PREVIOUS V19 RUN DID NOT COMPLETE",
+                "bad"
+            );
+            log(
+                "LAST RUN: " + cp.run,
+                "bad"
+            );
+            log(
+                "LAST PHASE: " + cp.phase,
+                "bad"
+            );
+            log(
+                "********************************",
                 "bad"
             );
         }
-
-        log(
-            "****************************",
-            "bad"
-        );
-
     } catch(e) {}
 }
 
-function sleep(ms) {
+function clearCheckpoint() {
+    localStorage.removeItem(KEY);
+    log("Checkpoint cleared.", "warn");
+}
 
+function delay(ms) {
     return new Promise(
-        resolve => setTimeout(resolve, ms)
+        r => setTimeout(r,ms)
     );
 }
 
-function describeState(state) {
-
-    try {
-        return JSON.stringify(state);
-    } catch(e) {
-        return "[unserializable]";
-    }
-}
-
-function waitForPop() {
-
+function waitForPop(timeout=3000) {
     return new Promise(
         (resolve,reject) => {
 
+            let done = false;
+
             const timer =
                 setTimeout(() => {
+                    if (done)
+                        return;
+
+                    done = true;
+
+                    removeEventListener(
+                        "popstate",
+                        handler
+                    );
 
                     reject(
                         new Error(
                             "popstate timeout"
                         )
                     );
+                },timeout);
 
-                },5000);
+            function handler(e) {
+                if (done)
+                    return;
+
+                done = true;
+                clearTimeout(timer);
+
+                resolve(e);
+            }
 
             addEventListener(
                 "popstate",
-                function handler(e) {
-
-                    clearTimeout(timer);
-
-                    cp(
-                        "POPSTATE_ENTER",
-                        describeState(e.state)
-                    );
-
-                    /*
-                     * Read the state exposed through
-                     * both interfaces while inside
-                     * the callback.
-                     */
-
-                    cp(
-                        "POP_EVENT_STATE",
-                        describeState(e.state)
-                    );
-
-                    cp(
-                        "HISTORY_STATE_IN_POP",
-                        describeState(history.state)
-                    );
-
-                    cp(
-                        "POPSTATE_EXIT"
-                    );
-
-                    resolve(e);
-
-                },
-                {once:true}
+                handler
             );
         }
     );
 }
 
-async function runV18() {
+async function oneRun(n) {
+
+    saveCP(n,"START");
+
+    /*
+     * Return to a known URL/state.
+     */
+
+    history.replaceState(
+        "v19-base-" + n,
+        "",
+        location.pathname
+    );
+
+    saveCP(n,"CREATE_INPUT");
+
+    const input =
+        document.createElement("input");
+
+    input.value =
+        "V19 run " + n;
+
+    document.body.insertBefore(
+        input,
+        document.body.firstChild
+    );
+
+    /*
+     * Historical same-document arrangement.
+     */
+
+    saveCP(n,"PUSH_TARGET");
+
+    history.pushState(
+        "v19-state1-" + n,
+        "",
+        location.pathname + "#v19target"
+    );
+
+    saveCP(n,"PUSH_CURRENT");
+
+    history.pushState(
+        "v19-state2-" + n,
+        "",
+        location.pathname
+    );
+
+    let blurSeen = false;
+    let replaceSeen = false;
+
+    input.onblur = function() {
+
+        blurSeen = true;
+        totalBlur++;
+
+        saveCP(
+            n,
+            "BLUR_ENTER"
+        );
+
+        /*
+         * This is the documented lifetime
+         * transition we're reproducing.
+         */
+
+        saveCP(
+            n,
+            "BEFORE_REPLACE"
+        );
+
+        history.replaceState(
+            "v19-replacement-" + n,
+            "",
+            location.href
+        );
+
+        replaceSeen = true;
+        totalReplace++;
+
+        saveCP(
+            n,
+            "AFTER_REPLACE"
+        );
+    };
+
+    saveCP(
+        n,
+        "BEFORE_FOCUS"
+    );
+
+    input.focus();
+
+    await delay(20);
+
+    const pop =
+        waitForPop();
+
+    saveCP(
+        n,
+        "BEFORE_BACK"
+    );
+
+    history.back();
+
+    saveCP(
+        n,
+        "BACK_RETURNED"
+    );
+
+    const ev =
+        await pop;
+
+    saveCP(
+        n,
+        "POPSTATE"
+    );
+
+    await delay(20);
+
+    /*
+     * Browser-visible consistency checks.
+     */
+
+    if (!blurSeen) {
+        anomalies++;
+        log(
+            "Run " + n +
+            ": blur missing",
+            "bad"
+        );
+    }
+
+    if (!replaceSeen) {
+        anomalies++;
+        log(
+            "Run " + n +
+            ": replacement missing",
+            "bad"
+        );
+    }
+
+    const expected =
+        "v19-replacement-" + n;
+
+    if (history.state !== expected) {
+        anomalies++;
+
+        log(
+            "Run " + n +
+            ": state mismatch: " +
+            String(history.state),
+            "bad"
+        );
+    }
+
+    /*
+     * Observe event state as well.
+     * Don't manipulate its backing storage.
+     */
+
+    if (ev.state == null) {
+        anomalies++;
+
+        log(
+            "Run " + n +
+            ": null popstate state",
+            "bad"
+        );
+    }
+
+    saveCP(
+        n,
+        "CLEANUP"
+    );
+
+    input.onblur = null;
+    input.remove();
+
+    history.replaceState(
+        null,
+        "",
+        location.pathname
+    );
+
+    saveCP(
+        n,
+        "COMPLETE"
+    );
+}
+
+async function startV19() {
 
     logBox.innerHTML = "";
 
-    previousRun();
+    showPrevious();
 
-    seq = 0;
-    events = [];
+    totalBlur = 0;
+    totalReplace = 0;
+    anomalies = 0;
 
-    let blurCount = 0;
-    let replaceCount = 0;
-    let anomalyCount = 0;
+    let runs =
+        Number(
+            document.getElementById("runs").value
+        );
 
-    log(
-        "V18 START",
-        "info"
-    );
+    if (!Number.isFinite(runs))
+        runs = 25;
 
+    runs =
+        Math.max(
+            1,
+            Math.min(100,runs)
+        );
+
+    log("V19 START", "info");
     log(navigator.userAgent);
+    log("");
+    log("Runs requested: " + runs);
     log("");
 
     try {
 
-        /*
-         * Baseline.
-         */
-
-        cp("BASELINE");
-
-        history.replaceState(
-            {
-                test:"v18-base",
-                marker:0x1800
-            },
-            "",
-            location.pathname
-        );
-
-        /*
-         * State that will become the target
-         * of history.back().
-         */
-
-        const originalState = {
-            test:"v18-original",
-            marker:0x1818,
-            text:"ORIGINAL_STATE"
-        };
-
-        cp(
-            "CREATE_ORIGINAL_STATE",
-            describeState(originalState)
-        );
-
-        history.pushState(
-            originalState,
-            "",
-            location.pathname +
-            "#v18target"
-        );
-
-        cp("PUSH_ORIGINAL_COMPLETE");
-
-        /*
-         * Move to a second history entry.
-         */
-
-        history.pushState(
-            {
-                test:"v18-current",
-                marker:0x1820,
-                text:"CURRENT_STATE"
-            },
-            "",
-            location.pathname
-        );
-
-        cp("PUSH_CURRENT_COMPLETE");
-
-        /*
-         * Focus target.
-         */
-
-        const input =
-            document.createElement("input");
-
-        input.value =
-            "V18 focused input";
-
-        document.body.insertBefore(
-            input,
-            document.body.firstChild
-        );
-
-        input.onfocus = function() {
-
-            cp("INPUT_FOCUS");
-        };
-
-        input.onblur = function() {
-
-            blurCount++;
-
-            cp(
-                "BLUR_ENTER",
-                "count=" + blurCount
-            );
-
-            /*
-             * Record what WebKit exposes before
-             * replaceState.
-             */
-
-            const before =
-                history.state;
-
-            cp(
-                "STATE_BEFORE_REPLACE",
-                describeState(before)
-            );
-
-            /*
-             * Replace the state while executing
-             * from the blur callback.
-             */
-
-            const replacement = {
-                test:"v18-replacement",
-                marker:0x18FF,
-                text:"REPLACEMENT_STATE"
-            };
-
-            cp(
-                "BEFORE_REPLACE_STATE",
-                describeState(replacement)
-            );
-
-            history.replaceState(
-                replacement,
-                "",
-                location.href
-            );
-
-            replaceCount++;
-
-            cp(
-                "AFTER_REPLACE_STATE"
-            );
-
-            /*
-             * Immediately observe the state again.
-             */
-
-            const after =
-                history.state;
-
-            cp(
-                "STATE_AFTER_REPLACE",
-                describeState(after)
-            );
-
-            if (
-                !after ||
-                after.test !==
-                    "v18-replacement" ||
-                after.marker !==
-                    0x18FF
-            ) {
-
-                anomalyCount++;
-
-                cp(
-                    "ANOMALY_AFTER_REPLACE",
-                    describeState(after)
-                );
-            }
-
-            cp("BLUR_EXIT");
-        };
-
-        cp("BEFORE_INPUT_FOCUS");
-
-        input.focus();
-
-        cp("AFTER_INPUT_FOCUS");
-
-        await sleep(100);
-
-        /*
-         * Same-document navigation back to
-         * the fragment entry.
-         */
-
-        const pop =
-            waitForPop();
-
-        cp("BEFORE_HISTORY_BACK");
-
-        history.back();
-
-        cp(
-            "AFTER_HISTORY_BACK_RETURN"
-        );
-
-        const popEvent =
-            await pop;
-
-        cp(
-            "AFTER_POPSTATE",
-            describeState(popEvent.state)
-        );
-
-        /*
-         * Compare the state once the navigation
-         * operation has completely settled.
-         */
-
-        await sleep(250);
-
-        cp("SETTLED_CHECK");
-
-        const finalHistoryState =
-            history.state;
-
-        const finalEventState =
-            popEvent.state;
-
-        cp(
-            "FINAL_HISTORY_STATE",
-            describeState(finalHistoryState)
-        );
-
-        cp(
-            "FINAL_EVENT_STATE",
-            describeState(finalEventState)
-        );
-
-        /*
-         * We expect the replacement state to be
-         * consistently visible after replacement.
-         */
-
-        if (
-            !finalHistoryState ||
-            finalHistoryState.test !==
-                "v18-replacement" ||
-            finalHistoryState.marker !==
-                0x18FF
+        for (
+            let n=1;
+            n<=runs;
+            n++
         ) {
 
-            anomalyCount++;
-
-            cp(
-                "FINAL_HISTORY_ANOMALY",
-                describeState(finalHistoryState)
+            log(
+                "RUN " +
+                n +
+                "/" +
+                runs
             );
+
+            await oneRun(n);
+
+            /*
+             * Give the event loop time to
+             * settle between reproductions.
+             */
+
+            await delay(50);
         }
 
-        /*
-         * Basic object integrity checks only.
-         */
-
-        cp("OBJECT_INTEGRITY_CHECK");
-
-        if (
-            originalState.test !==
-                "v18-original" ||
-            originalState.marker !==
-                0x1818 ||
-            originalState.text !==
-                "ORIGINAL_STATE"
-        ) {
-
-            anomalyCount++;
-
-            cp(
-                "ORIGINAL_OBJECT_CHANGED",
-                describeState(originalState)
-            );
-        }
-
-        /*
-         * Cleanup.
-         */
-
-        input.onblur = null;
-        input.onfocus = null;
-        input.remove();
-
-        history.replaceState(
-            null,
-            "",
-            location.pathname
-        );
-
-        cp("CLEANUP_COMPLETE");
-
-        complete();
+        markComplete(runs);
 
         log("");
         log(
-            "======= V18 RESULT =======",
+            "======= V19 RESULT =======",
             "info"
         );
 
         log(
             "STATUS: " +
             (
-                anomalyCount === 0
+                anomalies === 0
                 ? "NORMAL"
                 : "ANOMALY"
             ),
-            anomalyCount === 0
+            anomalies === 0
                 ? "ok"
                 : "bad"
         );
 
         log(
-            "BLUR CALLBACKS: " +
-            blurCount
+            "COMPLETED: " + runs
         );
 
         log(
-            "REPLACE IN BLUR: " +
-            replaceCount
+            "BLUR CALLBACKS: " +
+            totalBlur
+        );
+
+        log(
+            "REPLACE CALLBACKS: " +
+            totalReplace
         );
 
         log(
             "ANOMALIES: " +
-            anomalyCount
-        );
-
-        log(
-            "EVENTS: " +
-            events.length
+            anomalies
         );
 
         log(
@@ -584,14 +474,9 @@ async function runV18() {
 
     } catch(e) {
 
-        cp(
-            "JS_EXCEPTION",
-            String(e)
-        );
-
         log("");
         log(
-            "V18 EXCEPTION",
+            "V19 STOPPED",
             "bad"
         );
 
@@ -602,7 +487,7 @@ async function runV18() {
     }
 }
 
-previousRun();
+showPrevious();
 
 </script>
 </body>
