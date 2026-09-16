@@ -2,241 +2,472 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 V15 SerializedScriptValue Regression</title>
+<title>PS5 13.60 V16 Same-Document Re-entry</title>
 
 <style>
 body {
     background:#101827;
     color:#eee;
-    font:17px monospace;
-    padding:20px;
+    font:16px monospace;
+    padding:18px;
 }
 button {
-    font:17px monospace;
-    padding:10px 18px;
+    font:16px monospace;
+    padding:10px;
+    margin:5px;
 }
 #log {
     background:#17233a;
-    margin-top:15px;
-    padding:15px;
+    padding:14px;
+    margin-top:12px;
     white-space:pre-wrap;
 }
 .ok { color:#59ff7a; }
 .bad { color:#ff6868; }
-.info { color:#63caff; }
 .warn { color:#ffd166; }
+.info { color:#63caff; }
+
+#targets {
+    position:absolute;
+    left:-10000px;
+    top:-10000px;
+}
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V15 SSV Regression</h2>
+<h2>PS5 13.60 — V16 Same-Document Re-entry</h2>
 
-<button onclick="runV15()">RUN V15</button>
+<button onclick="runV16()">RUN V16</button>
+<button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
+<div id="targets"></div>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V15_CHECKPOINT";
-const box = document.getElementById("log");
+const KEY = "PS5_V16_CP";
 
-function log(text, cls="") {
-    const d = document.createElement("div");
-    d.textContent = text;
+const box =
+    document.getElementById("log");
+
+const targets =
+    document.getElementById("targets");
+
+let seq = 0;
+let events = [];
+
+function log(s, cls="") {
+
+    const d =
+        document.createElement("div");
+
+    d.textContent = s;
     d.className = cls;
+
     box.appendChild(d);
+
+    window.scrollTo(
+        0,
+        document.body.scrollHeight
+    );
 }
 
 function checkpoint(phase) {
+
+    seq++;
+
+    const record = {
+        n: seq,
+        phase: phase,
+        href: location.href,
+        time: performance.now()
+    };
+
+    events.push(record);
+
     try {
-        localStorage.setItem(KEY, JSON.stringify({
-            state: "RUNNING",
-            phase: phase,
-            time: Date.now()
-        }));
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                state:"RUNNING",
+                last:record,
+                events:events.slice(-30)
+            })
+        );
+
+    } catch(e) {}
+
+    log(
+        seq + ": " + phase,
+        "info"
+    );
+}
+
+function finish() {
+
+    try {
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                state:"COMPLETE",
+                events:events
+            })
+        );
+
     } catch(e) {}
 }
 
-function complete() {
-    try {
-        localStorage.setItem(KEY, JSON.stringify({
-            state: "COMPLETE",
-            time: Date.now()
-        }));
-    } catch(e) {}
+function clearCP() {
+
+    localStorage.removeItem(KEY);
+
+    log(
+        "Checkpoint cleared.",
+        "warn"
+    );
 }
 
 function showPrevious() {
+
     try {
-        const cp = JSON.parse(
-            localStorage.getItem(KEY)
+
+        const raw =
+            localStorage.getItem(KEY);
+
+        if (!raw)
+            return;
+
+        const cp =
+            JSON.parse(raw);
+
+        if (cp.state !== "RUNNING")
+            return;
+
+        log(
+            "******************************",
+            "bad"
         );
 
-        if (cp && cp.state === "RUNNING") {
+        log(
+            "PREVIOUS RUN DID NOT COMPLETE",
+            "bad"
+        );
+
+        if (cp.last) {
+
             log(
-                "PREVIOUS RUN DID NOT COMPLETE",
+                "LAST EVENT: " +
+                cp.last.n +
+                " / " +
+                cp.last.phase,
                 "bad"
             );
 
             log(
-                "LAST CHECKPOINT: " + cp.phase,
+                "URL: " +
+                cp.last.href,
                 "bad"
-            );
-
-            log(
-                "Do not immediately rerun it.",
-                "warn"
             );
         }
+
+        log(
+            "******************************",
+            "bad"
+        );
+
     } catch(e) {}
 }
 
-async function runV15() {
+function sleep(ms) {
+
+    return new Promise(
+        resolve =>
+            setTimeout(resolve, ms)
+    );
+}
+
+function waitForPop(timeout=5000) {
+
+    return new Promise(
+        (resolve,reject) => {
+
+            const timer =
+                setTimeout(() => {
+
+                    removeEventListener(
+                        "popstate",
+                        handler
+                    );
+
+                    reject(
+                        new Error(
+                            "popstate timeout"
+                        )
+                    );
+
+                }, timeout);
+
+            function handler(e) {
+
+                clearTimeout(timer);
+
+                checkpoint(
+                    "POPSTATE state=" +
+                    String(e.state)
+                );
+
+                resolve(e);
+            }
+
+            addEventListener(
+                "popstate",
+                handler,
+                {once:true}
+            );
+        }
+    );
+}
+
+async function runV16() {
 
     box.innerHTML = "";
 
     showPrevious();
 
-    log("V15 START", "info");
-    log(navigator.userAgent);
+    seq = 0;
+    events = [];
+
+    log(
+        "V16 START",
+        "info"
+    );
+
+    log(
+        navigator.userAgent
+    );
+
     log("");
 
     try {
 
         /*
-         * Historical WebKit SerializedScriptValue
-         * regression concept.
-         *
-         * Based on:
-         *
-         * fast/history/replacestate-nocrash.html
-         *
-         * No heap spray.
-         * No memory inspection.
-         * No arbitrary R/W.
+         * Clean baseline URL/state.
          */
-
-        checkpoint("INSTALL_SETTER");
-
-        let callbackCount = 0;
-
-        Object.prototype.__defineSetter__(
-            "foo",
-            function() {
-
-                callbackCount++;
-
-                checkpoint(
-                    "SETTER_CALLBACK_" +
-                    callbackCount
-                );
-
-                history.replaceState(
-                    "",
-                    ""
-                );
-            }
-        );
-
-        log(
-            "Setter installed",
-            "ok"
-        );
-
-        checkpoint("CREATE_STATE");
-
-        /*
-         * Keep this deliberately modest.
-         *
-         * The historical testcase used a large
-         * string. We're reproducing the control
-         * flow rather than attempting allocator
-         * manipulation.
-         */
-
-        const state = {
-            foo: 1,
-            zzz: "A".repeat(1024 * 1024)
-        };
-
-        log(
-            "State object created",
-            "ok"
-        );
 
         checkpoint(
-            "FIRST_REPLACE_STATE"
+            "BASELINE"
         );
 
         history.replaceState(
-            state,
+            {v16:0},
             "",
-            location.pathname + "#v15"
+            location.pathname
         );
 
-        log(
-            "replaceState returned",
-            "ok"
+        /*
+         * Focusable elements give us observable
+         * JS callbacks around navigation.
+         */
+
+        checkpoint(
+            "CREATE_TARGETS"
+        );
+
+        targets.innerHTML = "";
+
+        const a =
+            document.createElement("input");
+
+        const b =
+            document.createElement("input");
+
+        a.id = "v16-a";
+        b.id = "v16-b";
+
+        targets.appendChild(a);
+        targets.appendChild(b);
+
+        a.addEventListener(
+            "focus",
+            () => checkpoint("A_FOCUS")
+        );
+
+        a.addEventListener(
+            "blur",
+            () => checkpoint("A_BLUR")
+        );
+
+        b.addEventListener(
+            "focus",
+            () => checkpoint("B_FOCUS")
+        );
+
+        b.addEventListener(
+            "blur",
+            () => checkpoint("B_BLUR")
+        );
+
+        /*
+         * Observe hashchange separately from
+         * popstate.
+         */
+
+        function hashHandler() {
+
+            checkpoint(
+                "HASHCHANGE"
+            );
+        }
+
+        addEventListener(
+            "hashchange",
+            hashHandler
+        );
+
+        /*
+         * Establish same-document history.
+         */
+
+        checkpoint(
+            "PUSH_STATE_1"
+        );
+
+        history.pushState(
+            {v16:1},
+            "",
+            location.pathname + "#v16-one"
         );
 
         checkpoint(
-            "READ_HISTORY_STATE"
+            "PUSH_STATE_2"
         );
 
-        const returned =
+        history.pushState(
+            {v16:2},
+            "",
+            location.pathname + "#v16-two"
+        );
+
+        checkpoint(
+            "PUSH_STATE_3"
+        );
+
+        history.pushState(
+            {v16:3},
+            "",
+            location.pathname + "#v16-three"
+        );
+
+        /*
+         * Start with a focused element.
+         */
+
+        checkpoint(
+            "BEFORE_A_FOCUS"
+        );
+
+        a.focus();
+
+        await sleep(0);
+
+        checkpoint(
+            "AFTER_A_FOCUS"
+        );
+
+        /*
+         * FIRST SAME-DOCUMENT NAVIGATION
+         */
+
+        const pop1 =
+            waitForPop();
+
+        checkpoint(
+            "BEFORE_BACK_1"
+        );
+
+        history.back();
+
+        checkpoint(
+            "AFTER_BACK_1_RETURN"
+        );
+
+        await pop1;
+
+        checkpoint(
+            "AFTER_POP_1"
+        );
+
+        /*
+         * Force another observable focus
+         * transition between navigations.
+         */
+
+        checkpoint(
+            "BEFORE_B_FOCUS"
+        );
+
+        b.focus();
+
+        checkpoint(
+            "AFTER_B_FOCUS"
+        );
+
+        await sleep(0);
+
+        /*
+         * SECOND SAME-DOCUMENT NAVIGATION
+         */
+
+        const pop2 =
+            waitForPop();
+
+        checkpoint(
+            "BEFORE_BACK_2"
+        );
+
+        history.back();
+
+        checkpoint(
+            "AFTER_BACK_2_RETURN"
+        );
+
+        await pop2;
+
+        checkpoint(
+            "AFTER_POP_2"
+        );
+
+        await sleep(50);
+
+        checkpoint(
+            "FINAL_STATE_CHECK"
+        );
+
+        const finalState =
             history.state;
 
+        log("");
         log(
-            "history.state returned",
-            "ok"
-        );
-
-        checkpoint(
-            "PROPERTY_ACCESS"
-        );
-
-        /*
-         * Exercise the returned structured-clone
-         * value normally.
-         */
-
-        const foo =
-            returned ?
-            returned.foo :
-            undefined;
-
-        const len =
-            returned &&
-            returned.zzz ?
-            returned.zzz.length :
-            -1;
-
-        checkpoint(
-            "VERIFY_RESULT"
+            "FINAL history.state = " +
+            JSON.stringify(finalState)
         );
 
         log(
-            "foo = " + foo
+            "FINAL hash = " +
+            location.hash
         );
 
-        log(
-            "zzz.length = " + len
+        removeEventListener(
+            "hashchange",
+            hashHandler
         );
 
-        log(
-            "setter callbacks = " +
-            callbackCount
-        );
-
-        /*
-         * Cleanup the prototype modification.
-         */
-
-        checkpoint("CLEANUP");
-
-        delete Object.prototype.foo;
+        targets.innerHTML = "";
 
         history.replaceState(
             null,
@@ -244,11 +475,15 @@ async function runV15() {
             location.pathname
         );
 
-        complete();
+        checkpoint(
+            "CLEANUP_COMPLETE"
+        );
+
+        finish();
 
         log("");
         log(
-            "====== V15 RESULT ======",
+            "======= V16 RESULT =======",
             "info"
         );
 
@@ -258,25 +493,25 @@ async function runV15() {
         );
 
         log(
-            "CALLBACKS: " +
-            callbackCount
+            "EVENTS: " +
+            events.length
         );
 
         log(
-            "========================",
+            "==========================",
             "info"
         );
 
     } catch(e) {
 
         checkpoint(
-            "JS_EXCEPTION: " +
+            "JS_EXCEPTION " +
             String(e)
         );
 
         log("");
         log(
-            "V15 JS EXCEPTION",
+            "V16 EXCEPTION",
             "bad"
         );
 
@@ -284,20 +519,11 @@ async function runV15() {
             String(e),
             "bad"
         );
-
-        /*
-         * Try to restore Object.prototype.
-         */
-
-        try {
-            delete Object.prototype.foo;
-        } catch(x) {}
     }
 }
 
 showPrevious();
 
 </script>
-
 </body>
 </html>
