@@ -1,64 +1,57 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V7</title>
+<title>PS5 WebKit 13.60 V8 Crash Hunter</title>
 
 <style>
 body {
-  background:#101827;
-  color:#eee;
-  font:17px monospace;
-  padding:20px
+    background:#101827;
+    color:#eee;
+    font:16px monospace;
+    padding:18px
 }
-button,select {
-  font:17px monospace;
-  padding:10px;
-  margin:4px
+button,input,select {
+    font:16px monospace;
+    padding:8px;
+    margin:3px
 }
 #log {
-  background:#17233a;
-  padding:15px;
-  white-space:pre-wrap
+    background:#17233a;
+    padding:14px;
+    white-space:pre-wrap;
+    margin-top:10px
 }
-.ok {color:#59ff7a}
-.bad {color:#ff6868}
-.info {color:#63caff}
-.warn {color:#ffd166}
+.ok { color:#59ff7a }
+.bad { color:#ff6868 }
+.warn { color:#ffd166 }
+.info { color:#63caff }
 
-/* Based on the behaviour exercised by the
-   upstream WebKit regression testcase. */
-
-.v7box {
-  position:absolute;
-  left:-10000px;
-  width:20px;
-  height:20px;
-
-  -webkit-animation-duration:0.02s;
-  -webkit-animation-name:v7move;
+.anim {
+    position:absolute;
+    left:-10000px;
+    width:20px;
+    height:20px;
+    -webkit-animation-duration:.01s;
 }
-
-@-webkit-keyframes v7move {
-  from {
-    -webkit-transform:translate(0,0);
-  }
-  to {
-    -webkit-transform:translate(10px,0);
-  }
+@-webkit-keyframes v8move {
+    from { -webkit-transform:translateX(0) }
+    to   { -webkit-transform:translateX(10px) }
 }
 </style>
 
-<h2>PS5 WebKit 13.60 — V7</h2>
+<h2>PS5 WebKit 13.60 V8 Crash Hunter</h2>
 
+Runs/test:
 <select id="runs">
-<option value="10">10 runs</option>
-<option value="100" selected>100 runs</option>
-<option value="500">500 runs</option>
-<option value="2000">2000 runs</option>
+<option>10</option>
+<option selected>100</option>
+<option>500</option>
+<option>1000</option>
 </select>
 
-<button onclick="start()">Run upstream regression</button>
-<button onclick="stopRun()">Stop</button>
-<button onclick="clearLog()">Clear</button>
+<button onclick="start()">RUN ALL</button>
+<button onclick="replay()">REPLAY CHECKPOINT</button>
+<button onclick="stopRun()">STOP</button>
+<button onclick="clearLog()">CLEAR</button>
 
 <div id="sandbox"></div>
 <div id="log"></div>
@@ -66,371 +59,704 @@ button,select {
 <script>
 "use strict";
 
-const output =
-  document.getElementById("log");
+const logbox = document.getElementById("log");
+const sandbox = document.getElementById("sandbox");
 
-const sandbox =
-  document.getElementById("sandbox");
+let stopped = false;
 
-let stopping=false;
-
-let stats={
-  pass:0,
-  fail:0,
-  timeout:0,
-  exceptions:0
+let stats = {
+    pass:0,
+    fail:0,
+    exception:0,
+    timeout:0
 };
 
-function log(text,cls="") {
-  const e=document.createElement("div");
-  e.textContent=text;
-  e.className=cls;
-  output.appendChild(e);
+function log(s,c="") {
+    const d=document.createElement("div");
+    d.textContent=s;
+    d.className=c;
+    logbox.appendChild(d);
+    window.scrollTo(0,document.body.scrollHeight);
 }
 
 function clearLog() {
-  output.innerHTML="";
+    logbox.innerHTML="";
 }
 
 function stopRun() {
-  stopping=true;
-  log("STOP requested","warn");
+    stopped=true;
+    log("STOP REQUESTED","warn");
 }
 
-/*
- Keep a checkpoint BEFORE the operation.
+/* -----------------------------
+   CRASH CHECKPOINT
+----------------------------- */
 
- If WebContent disappears before COMPLETE
- is written, reopening the page exposes the
- last testcase/iteration.
-*/
+function checkpoint(test,iteration,phase,state="RUNNING") {
+    try {
+        localStorage.setItem(
+            "v8-checkpoint",
+            JSON.stringify({
+                test,
+                iteration,
+                phase,
+                state,
+                timestamp:Date.now()
+            })
+        );
+    } catch(e) {}
+}
 
-function checkpoint(iter,state) {
-
-  try {
-
-    localStorage.setItem(
-      "v7-checkpoint",
-      JSON.stringify({
-        test:
-          "animation-start-event-destroy-renderer",
-        iteration:iter,
-        state:state,
-        time:Date.now()
-      })
-    );
-
-  } catch(e) {}
+function getCheckpoint() {
+    try {
+        const x=localStorage.getItem("v8-checkpoint");
+        return x ? JSON.parse(x) : null;
+    } catch(e) {
+        return null;
+    }
 }
 
 function showPrevious() {
+    const c=getCheckpoint();
 
-  try {
-
-    const raw=
-      localStorage.getItem(
-        "v7-checkpoint"
-      );
-
-    if(!raw)
-      return;
-
-    const c=JSON.parse(raw);
-
-    if(c.state==="RUNNING") {
-
-      log(
-        "PREVIOUS RUN DID NOT COMPLETE",
-        "warn"
-      );
-
-      log(
-        "Test: "+c.test,
-        "warn"
-      );
-
-      log(
-        "Iteration: "+
-        c.iteration,
-        "warn"
-      );
+    if(c && c.state==="RUNNING") {
+        log("================================","bad");
+        log("PREVIOUS RUN DID NOT COMPLETE","bad");
+        log("TEST: "+c.test,"bad");
+        log("ITERATION: "+c.iteration,"bad");
+        log("PHASE: "+c.phase,"bad");
+        log("================================","bad");
     }
-
-  } catch(e) {}
 }
 
-/*
- Adaptation of WebKit's
- animation-start-event-destroy-renderer
- regression behaviour.
+/* =============================
+   TEST 1
+   Detached DOM wrapper
+============================= */
 
- Element A is removed from its animation
- callback.
+async function detachedDOM(i) {
 
- Element B has its renderer hidden from
- its animation callback.
-*/
+    checkpoint("detachedDOM",i,"create");
 
-function regressionCase(iter) {
+    const p=document.createElement("div");
+    const c=document.createElement("span");
 
-  return new Promise(resolve=>{
+    p.appendChild(c);
+    sandbox.appendChild(p);
 
-    const container=
-      document.createElement("div");
+    c.textContent="before-"+i;
 
-    const a=
-      document.createElement("div");
+    checkpoint("detachedDOM",i,"detach");
 
-    const b=
-      document.createElement("div");
+    p.removeChild(c);
 
-    a.className="v7box";
-    b.className="v7box";
+    checkpoint("detachedDOM",i,"mutate-detached");
 
-    /*
-     Give each iteration unique animation
-     names so WebKit must establish fresh
-     animation state.
-    */
+    c.textContent="after-"+i;
+    c.setAttribute("data-v8",String(i));
 
-    a.style.webkitAnimationName=
-      "v7move";
+    const ok =
+        c.textContent==="after-"+i &&
+        c.getAttribute("data-v8")===String(i);
 
-    b.style.webkitAnimationName=
-      "v7move";
+    p.remove();
 
-    container.appendChild(a);
-    container.appendChild(b);
+    return ok;
+}
 
-    sandbox.appendChild(container);
+/* =============================
+   TEST 2
+   Document / iframe teardown
+============================= */
 
-    let completed=0;
-    let finished=false;
+async function iframeLifetime(i) {
 
-    function done() {
+    checkpoint("iframeLifetime",i,"create-frame");
 
-      completed++;
+    const f=document.createElement("iframe");
+    f.src="about:blank";
+    sandbox.appendChild(f);
 
-      if(completed!==2)
-        return;
+    await new Promise(r=>setTimeout(r,0));
 
-      if(finished)
-        return;
+    checkpoint("iframeLifetime",i,"obtain-document");
 
-      finished=true;
+    const doc=f.contentDocument;
 
-      clearTimeout(timer);
-
-      try {
-        container.remove();
-      } catch(e) {}
-
-      resolve(true);
+    if(!doc) {
+        f.remove();
+        return false;
     }
 
-    a.addEventListener(
-      "webkitAnimationStart",
-      function handler(){
+    const node=doc.createElement("div");
+    node.textContent="frame-"+i;
 
-        a.removeEventListener(
-          "webkitAnimationStart",
-          handler
-        );
+    doc.body.appendChild(node);
 
-        /*
-         Critical regression operation:
-         destroy/remove the element while
-         its animation callback executes.
-        */
+    checkpoint("iframeLifetime",i,"remove-frame");
 
-        if(a.parentNode)
-          a.parentNode.removeChild(a);
+    f.remove();
 
-        done();
-      },
-      false
+    checkpoint("iframeLifetime",i,"retained-wrapper");
+
+    node.textContent="retained-"+i;
+    node.setAttribute("data-after","1");
+
+    return (
+        node.textContent==="retained-"+i &&
+        node.getAttribute("data-after")==="1"
+    );
+}
+
+/* =============================
+   TEST 3
+   Range mutation
+============================= */
+
+async function rangeMutation(i) {
+
+    checkpoint("rangeMutation",i,"create");
+
+    const root=document.createElement("div");
+
+    root.innerHTML =
+        "<div><span>AAAA</span><b>BBBB</b></div>"+
+        "<div><i>CCCC</i><em>DDDD</em></div>";
+
+    sandbox.appendChild(root);
+
+    const spans=root.querySelectorAll(
+        "span,em"
     );
 
-    b.addEventListener(
-      "webkitAnimationStart",
-      function handler(){
+    const r=document.createRange();
 
-        b.removeEventListener(
-          "webkitAnimationStart",
-          handler
+    checkpoint("rangeMutation",i,"set-range");
+
+    r.setStart(spans[0].firstChild,1);
+    r.setEnd(spans[1].firstChild,3);
+
+    checkpoint("rangeMutation",i,"extract");
+
+    const frag=r.extractContents();
+
+    checkpoint("rangeMutation",i,"inspect");
+
+    const ok=frag instanceof DocumentFragment;
+
+    root.remove();
+
+    return ok;
+}
+
+/* =============================
+   TEST 4
+   Selection mutation
+============================= */
+
+async function selectionMutation(i) {
+
+    checkpoint("selectionMutation",i,"create");
+
+    const root=document.createElement("div");
+    root.contentEditable="true";
+    root.innerHTML="<p>alpha <b>beta</b> gamma</p>";
+
+    sandbox.appendChild(root);
+
+    const text=root.firstChild.firstChild;
+
+    const r=document.createRange();
+
+    r.setStart(text,0);
+    r.setEnd(text,Math.min(3,text.length));
+
+    const s=window.getSelection();
+
+    checkpoint("selectionMutation",i,"selection");
+
+    s.removeAllRanges();
+    s.addRange(r);
+
+    checkpoint("selectionMutation",i,"destroy-tree");
+
+    root.innerHTML="<div>replacement</div>";
+
+    checkpoint("selectionMutation",i,"clear-selection");
+
+    s.removeAllRanges();
+
+    const ok=root.textContent==="replacement";
+
+    root.remove();
+
+    return ok;
+}
+
+/* =============================
+   TEST 5
+   Event re-entrancy
+============================= */
+
+async function eventReentry(i) {
+
+    checkpoint("eventReentry",i,"create");
+
+    const root=document.createElement("div");
+
+    for(let n=0;n<20;n++) {
+        const x=document.createElement("span");
+        x.textContent=String(n);
+        root.appendChild(x);
+    }
+
+    sandbox.appendChild(root);
+
+    let calls=0;
+
+    function handler() {
+
+        calls++;
+
+        checkpoint(
+            "eventReentry",
+            i,
+            "inside-handler"
         );
 
-        /*
-         Second upstream behaviour:
-         destroy/hide its renderer during
-         the callback.
-        */
+        while(root.firstChild)
+            root.removeChild(root.firstChild);
 
-        b.style.display="none";
+        root.innerHTML =
+            "<div><span>replacement</span></div>";
+    }
 
-        done();
-      },
-      false
+    root.addEventListener("v8event",handler);
+
+    checkpoint("eventReentry",i,"dispatch");
+
+    root.dispatchEvent(new Event("v8event"));
+
+    root.removeEventListener("v8event",handler);
+
+    const ok =
+        calls===1 &&
+        root.textContent==="replacement";
+
+    root.remove();
+
+    return ok;
+}
+
+/* =============================
+   TEST 6
+   Parser / innerHTML churn
+============================= */
+
+async function parserMutation(i) {
+
+    checkpoint("parserMutation",i,"create");
+
+    const root=document.createElement("div");
+    sandbox.appendChild(root);
+
+    checkpoint("parserMutation",i,"parse-1");
+
+    root.innerHTML =
+        "<table><tbody><tr><td>"+
+        "<div><span>test</span></div>"+
+        "</td></tr></tbody></table>";
+
+    checkpoint("parserMutation",i,"replace");
+
+    root.innerHTML =
+        "<select><option>A</option>"+
+        "<option>B</option></select>";
+
+    checkpoint("parserMutation",i,"replace-again");
+
+    root.innerHTML =
+        "<div><p><b>final-"+i+"</b></p></div>";
+
+    const ok =
+        root.textContent==="final-"+i;
+
+    root.remove();
+
+    return ok;
+}
+
+/* =============================
+   TEST 7
+   Animation destruction
+
+   Based on behaviour exercised
+   by upstream WebKit regression
+   testing.
+============================= */
+
+async function animationDestroy(i) {
+
+    return new Promise(resolve=>{
+
+        checkpoint(
+            "animationDestroy",
+            i,
+            "create"
+        );
+
+        const root=document.createElement("div");
+        const x=document.createElement("div");
+
+        x.className="anim";
+
+        root.appendChild(x);
+        sandbox.appendChild(root);
+
+        let finished=false;
+
+        function handler() {
+
+            checkpoint(
+                "animationDestroy",
+                i,
+                "animation-handler"
+            );
+
+            x.removeEventListener(
+                "webkitAnimationStart",
+                handler
+            );
+
+            x.remove();
+
+            checkpoint(
+                "animationDestroy",
+                i,
+                "after-remove"
+            );
+
+            finished=true;
+
+            root.remove();
+
+            resolve(true);
+        }
+
+        x.addEventListener(
+            "webkitAnimationStart",
+            handler
+        );
+
+        x.style.webkitAnimationName=
+            "v8move";
+
+        void x.offsetHeight;
+
+        setTimeout(()=>{
+
+            if(finished)
+                return;
+
+            root.remove();
+            resolve("timeout");
+
+        },500);
+    });
+}
+
+/* =============================
+   TEST 8
+   Typed memory integrity
+============================= */
+
+async function typedMemory(i) {
+
+    checkpoint("typedMemory",i,"allocate");
+
+    const size=0x4000;
+
+    const buffer=new ArrayBuffer(size);
+
+    const u8=new Uint8Array(buffer);
+    const u32=new Uint32Array(buffer);
+    const dv=new DataView(buffer);
+
+    checkpoint("typedMemory",i,"write");
+
+    for(let n=0;n<u32.length;n++)
+        u32[n]=(0x41410000 ^ n ^ i)>>>0;
+
+    checkpoint("typedMemory",i,"verify");
+
+    for(let n=0;n<u32.length;n++) {
+        if(
+            u32[n] !==
+            ((0x41410000 ^ n ^ i)>>>0)
+        )
+            return false;
+    }
+
+    checkpoint("typedMemory",i,"bounds");
+
+    let trapped=false;
+
+    try {
+        dv.getUint32(size+8);
+    } catch(e) {
+        trapped=true;
+    }
+
+    return trapped;
+}
+
+/* -----------------------------
+   TEST TABLE
+----------------------------- */
+
+const tests = [
+    ["detachedDOM",detachedDOM],
+    ["iframeLifetime",iframeLifetime],
+    ["rangeMutation",rangeMutation],
+    ["selectionMutation",selectionMutation],
+    ["eventReentry",eventReentry],
+    ["parserMutation",parserMutation],
+    ["animationDestroy",animationDestroy],
+    ["typedMemory",typedMemory]
+];
+
+/* -----------------------------
+   EXECUTION
+----------------------------- */
+
+async function execute(name,fn,i) {
+
+    checkpoint(name,i,"begin");
+
+    try {
+
+        const result=await fn(i);
+
+        if(result==="timeout") {
+
+            stats.timeout++;
+
+            log(
+                "[TIMEOUT] "+name+
+                " #"+i,
+                "warn"
+            );
+
+        } else if(result===true) {
+
+            stats.pass++;
+
+        } else {
+
+            stats.fail++;
+
+            log(
+                "[FAIL] "+name+
+                " #"+i,
+                "bad"
+            );
+
+            stopped=true;
+        }
+
+    } catch(e) {
+
+        stats.exception++;
+
+        log(
+            "[EXCEPTION] "+
+            name+
+            " #"+i+
+            " :: "+e,
+            "bad"
+        );
+
+        stopped=true;
+    }
+
+    checkpoint(
+        name,
+        i,
+        "complete",
+        "COMPLETE"
     );
-
-    /*
-     Force style/layout observation after
-     insertion.
-    */
-
-    void container.offsetHeight;
-
-    const timer=setTimeout(()=>{
-
-      if(finished)
-        return;
-
-      finished=true;
-
-      try {
-        container.remove();
-      } catch(e) {}
-
-      resolve(false);
-
-    },1000);
-  });
 }
 
 async function start() {
 
-  clearLog();
-  showPrevious();
+    clearLog();
+    showPrevious();
 
-  stopping=false;
+    stopped=false;
 
-  stats={
-    pass:0,
-    fail:0,
-    timeout:0,
-    exceptions:0
-  };
+    stats={
+        pass:0,
+        fail:0,
+        exception:0,
+        timeout:0
+    };
 
-  const runs=
-    Number(
-      document.getElementById(
-        "runs"
-      ).value
-    );
+    const runs=
+        Number(
+            document.getElementById("runs").value
+        );
 
-  log(
-    "V7 upstream regression test",
-    "info"
-  );
+    log("V8 CRASH HUNTER","info");
+    log("UA: "+navigator.userAgent);
+    log("Tests: "+tests.length);
+    log("Runs/test: "+runs);
+    log("");
 
-  log(
-    "Test: animation-start-event-destroy-renderer"
-  );
+    const startTime=performance.now();
 
-  log(
-    "UA: "+navigator.userAgent
-  );
+    for(const [name,fn] of tests) {
 
-  log(
-    "Runs: "+runs
-  );
-
-  log("");
-
-  for(let i=0;i<runs;i++) {
-
-    if(stopping)
-      break;
-
-    checkpoint(
-      i,
-      "RUNNING"
-    );
-
-    try {
-
-      const result=
-        await regressionCase(i);
-
-      if(result) {
-
-        stats.pass++;
-
-      } else {
-
-        stats.timeout++;
+        if(stopped)
+            break;
 
         log(
-          "[TIMEOUT] iteration "+
-          i,
-          "warn"
+            ">>> "+name,
+            "info"
         );
-      }
 
-    } catch(e) {
+        for(let i=0;i<runs;i++) {
 
-      stats.exceptions++;
+            if(stopped)
+                break;
 
-      log(
-        "[EXCEPTION] iteration "+
-        i+
-        ": "+
-        e,
-        "bad"
-      );
+            await execute(
+                name,
+                fn,
+                i
+            );
+
+            if(i%25===0) {
+
+                log(
+                    name+
+                    " "+
+                    i+
+                    "/"+
+                    runs
+                );
+
+                await new Promise(
+                    r=>setTimeout(r,0)
+                );
+            }
+        }
     }
 
-    checkpoint(
-      i,
-      "COMPLETE"
+    const runtime=
+        performance.now()-startTime;
+
+    log("");
+    log(
+        "======= V8 RESULT =======",
+        "info"
     );
 
-    if(i%10===0) {
+    log(
+        "PASS:       "+stats.pass,
+        "ok"
+    );
 
-      log(
-        "Iteration "+
-        i+
-        "/"+
-        runs,
+    log(
+        "FAIL:       "+stats.fail,
+        stats.fail ? "bad":"ok"
+    );
+
+    log(
+        "EXCEPTIONS: "+stats.exception,
+        stats.exception ? "bad":"ok"
+    );
+
+    log(
+        "TIMEOUT:    "+stats.timeout,
+        stats.timeout ? "warn":"ok"
+    );
+
+    log(
+        "RUNTIME:    "+
+        runtime.toFixed(0)+
+        " ms"
+    );
+
+    log(
+        "=========================",
         "info"
-      );
+    );
+}
 
-      await new Promise(
-        r=>setTimeout(r,0)
-      );
+/* -----------------------------
+   REPLAY ONLY THE LAST
+   CHECKPOINTED TEST
+----------------------------- */
+
+async function replay() {
+
+    clearLog();
+
+    const c=getCheckpoint();
+
+    if(!c) {
+        log("No checkpoint available","warn");
+        return;
     }
-  }
 
-  log("");
-  log(
-    "======= V7 RESULT =======",
-    "info"
-  );
+    const entry=
+        tests.find(x=>x[0]===c.test);
 
-  log(
-    "PASS:       "+
-    stats.pass,
-    "ok"
-  );
+    if(!entry) {
+        log("Unknown checkpoint test","bad");
+        return;
+    }
 
-  log(
-    "TIMEOUT:    "+
-    stats.timeout,
-    stats.timeout ?
-      "warn":"ok"
-  );
+    log(
+        "REPLAYING CHECKPOINT",
+        "warn"
+    );
 
-  log(
-    "EXCEPTIONS: "+
-    stats.exceptions,
-    stats.exceptions ?
-      "bad":"ok"
-  );
+    log("Test: "+c.test);
+    log("Iteration: "+c.iteration);
+    log("Previous phase: "+c.phase);
+    log("");
 
-  log(
-    "=========================",
-    "info"
-  );
+    /*
+       Replay from iteration zero because
+       earlier executions may influence
+       engine/DOM state.
+    */
+
+    for(let i=0;i<=c.iteration;i++) {
+
+        log(
+            "Replay "+
+            i+
+            "/"+
+            c.iteration
+        );
+
+        await execute(
+            entry[0],
+            entry[1],
+            i
+        );
+
+        await new Promise(
+            r=>setTimeout(r,0)
+        );
+    }
+
+    log(
+        "Replay completed without crash.",
+        "ok"
+    );
 }
 
 showPrevious();
