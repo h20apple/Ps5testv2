@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V31 Range createContextualFragment Probe</title>
+<title>PS5 13.60 - V32 MutationObserver Lifetime</title>
 
 <style>
 body {
@@ -24,10 +24,10 @@ pre {
 }
 </style>
 
-<h2>PS5 13.60 — V31</h2>
-<div>Range.createContextualFragment lifetime probe</div>
+<h2>PS5 13.60 — V32</h2>
+<div>MutationObserver callback / node lifetime probe</div>
 
-<p><button id="run">RUN V31</button></p>
+<p><button id="run">RUN V32</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -36,121 +36,108 @@ pre {
 "use strict";
 
 /*
- * V31
+ * V32
  *
- * Inspired by WebKit bug 312244:
- * "Use-after-free of Node in
- * Range::createContextualFragment"
+ * Lifetime/re-entrancy diagnostic inspired by
+ * WebKit bug 179224:
  *
- * This is a browser-visible diagnostic.
+ * "MutationObserver callback should be kept alive
+ * as long as its observed nodes are alive"
  *
- * It does NOT perform heap reclamation,
- * spraying, address disclosure or memory
- * read/write primitive construction.
+ * No heap spray/reclaim or memory primitive.
  */
 
-const out =
-    document.querySelector("#log");
-
-const statusBox =
-    document.querySelector("#status");
-
-const button =
-    document.querySelector("#run");
+const output = document.querySelector("#log");
+const statusBox = document.querySelector("#status");
+const button = document.querySelector("#run");
 
 let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
 
 function log(s) {
-    out.textContent += s + "\n";
+    output.textContent += s + "\n";
     console.log(s);
 }
 
 function cp(s) {
     try {
-        localStorage.setItem(
-            "PS5_V31_CP",
-            s
-        );
+        localStorage.setItem("PS5_V32_CP", s);
     } catch (_) {}
 
     log("[CP] " + s);
 }
 
-function good(s) {
+function good(name) {
     pass++;
-    log("[PASS] " + s);
+    log("[PASS] " + name);
 }
 
-function bad(s, reason) {
+function bad(name, reason) {
     anomalies++;
-    log(
-        "[ANOMALY] " +
-        s +
-        " :: " +
-        reason
-    );
+    log("[ANOMALY] " + name + " :: " + reason);
 }
 
-function caught(s, e) {
+function caught(name, e) {
     exceptions++;
-    log(
-        "[EXCEPTION] " +
-        s +
-        " :: " +
-        e
-    );
+    log("[EXCEPTION] " + name + " :: " + e);
 }
 
 function sleep(ms) {
-    return new Promise(
-        r => setTimeout(r, ms)
-    );
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-
-/* --------------------------------
-   A — capability
--------------------------------- */
+/*
+ * A
+ * Basic observer delivery.
+ */
 
 async function testA() {
 
-    const name =
-        "A_CAPABILITY";
+    const name = "A_BASIC_DELIVERY";
 
-    cp(name + ":START");
+    cp(name + ":CREATE");
 
     try {
 
-        const r =
-            document.createRange();
+        const node = document.createElement("div");
+        document.body.appendChild(node);
 
-        log(
-            "[A] createContextualFragment=" +
-            typeof r.createContextualFragment
-        );
+        let calls = 0;
 
-        log(
-            "[A] trustedTypes=" +
-            typeof window.trustedTypes
-        );
+        const observer =
+            new MutationObserver(records => {
 
-        log(
-            "[A] TrustedHTML=" +
-            typeof window.TrustedHTML
-        );
+                calls++;
 
-        if (
-            typeof r.createContextualFragment
-            !== "function"
-        ) {
-            bad(
-                name,
-                "API missing"
-            );
-            return;
-        }
+                cp(name + ":CALLBACK");
+
+                log(
+                    "[A] records=" +
+                    records.length
+                );
+
+                log(
+                    "[A] node connected=" +
+                    node.isConnected
+                );
+            });
+
+        observer.observe(node, {
+            attributes:true
+        });
+
+        node.setAttribute("data-v32", "1");
+
+        await sleep(50);
+
+        log("[A] callbacks=" + calls);
+
+        if (calls !== 1)
+            bad(name, "unexpected callback count " + calls);
+
+        observer.disconnect();
+        node.remove();
 
         cp(name + ":COMPLETE");
         good(name);
@@ -161,67 +148,84 @@ async function testA() {
 }
 
 
-/* --------------------------------
-   B — ordinary contextual fragment
--------------------------------- */
+/*
+ * B
+ * Remove observed node before callback delivery.
+ */
 
 async function testB() {
 
-    const name =
-        "B_BASIC_FRAGMENT";
+    const name = "B_REMOVE_BEFORE_DELIVERY";
 
     cp(name + ":CREATE");
 
     try {
 
-        const host =
+        const parent =
             document.createElement("div");
 
-        host.innerHTML =
-            "<div id='ctx'>context</div>";
+        const target =
+            document.createElement("span");
 
-        document.body.appendChild(host);
+        target.textContent = "V32-B";
 
-        const ctx =
-            host.firstChild;
+        parent.appendChild(target);
+        document.body.appendChild(parent);
 
-        const range =
-            document.createRange();
+        let calls = 0;
 
-        range.selectNodeContents(ctx);
+        const observer =
+            new MutationObserver(records => {
 
-        cp(name + ":BEFORE_CREATE");
+                calls++;
 
-        const fragment =
-            range.createContextualFragment(
-                "<span id='v31b'>hello</span>"
-            );
+                cp(name + ":CALLBACK_ENTER");
 
-        cp(name + ":AFTER_CREATE");
+                log(
+                    "[B] records=" +
+                    records.length
+                );
 
-        const node =
-            fragment.firstChild;
+                log(
+                    "[B] target connected=" +
+                    target.isConnected
+                );
 
-        log(
-            "[B] node=" +
-            node.nodeName
+                log(
+                    "[B] retained text=" +
+                    target.textContent
+                );
+
+                cp(name + ":CALLBACK_EXIT");
+            });
+
+        observer.observe(target, {
+            attributes:true
+        });
+
+        cp(name + ":MUTATE");
+
+        target.setAttribute(
+            "data-test",
+            "removed"
         );
 
+        cp(name + ":REMOVE");
+
+        parent.remove();
+
+        await sleep(50);
+
+        log("[B] callbacks=" + calls);
         log(
-            "[B] text=" +
-            node.textContent
+            "[B] final connected=" +
+            target.isConnected
         );
 
-        ctx.appendChild(fragment);
+        if (calls !== 1)
+            bad(name, "callback count=" + calls);
 
-        log(
-            "[B] inserted=" +
-            !!document.getElementById(
-                "v31b"
-            )
-        );
-
-        host.remove();
+        observer.disconnect();
 
         cp(name + ":COMPLETE");
         good(name);
@@ -232,87 +236,14 @@ async function testB() {
 }
 
 
-/* --------------------------------
-   C — remove context before use
--------------------------------- */
+/*
+ * C
+ * Observer removes its own target synchronously.
+ */
 
 async function testC() {
 
-    const name =
-        "C_REMOVE_CONTEXT";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const host =
-            document.createElement("section");
-
-        const context =
-            document.createElement("div");
-
-        context.textContent =
-            "V31 context";
-
-        host.appendChild(context);
-
-        document.body.appendChild(host);
-
-        const range =
-            document.createRange();
-
-        range.selectNodeContents(context);
-
-        cp(name + ":REMOVE_CONTEXT");
-
-        host.remove();
-
-        log(
-            "[C] context connected=" +
-            context.isConnected
-        );
-
-        cp(name + ":CREATE_FRAGMENT");
-
-        const fragment =
-            range.createContextualFragment(
-                "<b>detached-context</b>"
-            );
-
-        cp(name + ":CREATED");
-
-        log(
-            "[C] children=" +
-            fragment.childNodes.length
-        );
-
-        log(
-            "[C] text=" +
-            fragment.textContent
-        );
-
-        log(
-            "[C] range collapsed=" +
-            range.collapsed
-        );
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-        caught(name, e);
-    }
-}
-
-
-/* --------------------------------
-   D — mutation immediately before call
--------------------------------- */
-
-async function testD() {
-
-    const name =
-        "D_CONTEXT_MUTATION";
+    const name = "C_REMOVE_IN_CALLBACK";
 
     cp(name + ":CREATE");
 
@@ -321,56 +252,64 @@ async function testD() {
         const outer =
             document.createElement("div");
 
-        outer.innerHTML =
-            "<div><span>AAAA</span></div>";
+        const target =
+            document.createElement("div");
 
+        target.textContent = "V32-C";
+
+        outer.appendChild(target);
         document.body.appendChild(outer);
 
-        const context =
-            outer.firstChild;
+        let calls = 0;
 
-        const retained =
-            context.firstChild;
+        const observer =
+            new MutationObserver(records => {
 
-        const range =
-            document.createRange();
+                calls++;
 
-        range.selectNodeContents(context);
+                cp(name + ":CALLBACK_ENTER");
 
-        cp(name + ":MUTATE");
+                if (calls === 1) {
 
-        context.innerHTML =
-            "<em>BBBB</em>";
+                    target.remove();
 
-        log(
-            "[D] retained connected=" +
-            retained.isConnected
+                    cp(name + ":TARGET_REMOVED");
+
+                    log(
+                        "[C] connected=" +
+                        target.isConnected
+                    );
+
+                    log(
+                        "[C] retained text=" +
+                        target.textContent
+                    );
+
+                    log(
+                        "[C] records=" +
+                        records.length
+                    );
+                }
+
+                cp(name + ":CALLBACK_EXIT");
+            });
+
+        observer.observe(target, {
+            attributes:true,
+            childList:true,
+            subtree:true
+        });
+
+        target.setAttribute(
+            "data-trigger",
+            "1"
         );
 
-        cp(name + ":CREATE_FRAGMENT");
+        await sleep(75);
 
-        const fragment =
-            range.createContextualFragment(
-                "<strong>CCCC</strong>"
-            );
+        log("[C] callbacks=" + calls);
 
-        cp(name + ":AFTER_CREATE");
-
-        log(
-            "[D] fragment=" +
-            fragment.textContent
-        );
-
-        log(
-            "[D] context=" +
-            context.textContent
-        );
-
-        log(
-            "[D] retained=" +
-            retained.textContent
-        );
-
+        observer.disconnect();
         outer.remove();
 
         cp(name + ":COMPLETE");
@@ -382,113 +321,85 @@ async function testD() {
 }
 
 
-/* --------------------------------
-   E — custom element parser callback
--------------------------------- */
+/*
+ * D
+ * Replace observed subtree from callback while
+ * retaining references to old nodes.
+ */
 
-async function testE() {
+async function testD() {
 
-    const name =
-        "E_CUSTOM_ELEMENT_CALLBACK";
+    const name = "D_REPLACE_SUBTREE";
 
     cp(name + ":CREATE");
 
     try {
 
-        if (
-            !window.customElements
-        ) {
-            log(
-                "[E] customElements unavailable"
-            );
-
-            good(name);
-            return;
-        }
-
-        if (
-            !customElements.get(
-                "v31-callback"
-            )
-        ) {
-
-            class V31Callback
-                extends HTMLElement {
-
-                constructor() {
-                    super();
-
-                    window.__v31ConstructorCount =
-                        (
-                            window.__v31ConstructorCount
-                            || 0
-                        ) + 1;
-
-                    cp(
-                        name +
-                        ":CONSTRUCTOR"
-                    );
-                }
-
-                connectedCallback() {
-
-                    window.__v31ConnectedCount =
-                        (
-                            window.__v31ConnectedCount
-                            || 0
-                        ) + 1;
-
-                    cp(
-                        name +
-                        ":CONNECTED"
-                    );
-                }
-            }
-
-            customElements.define(
-                "v31-callback",
-                V31Callback
-            );
-        }
-
-        window.__v31ConstructorCount = 0;
-        window.__v31ConnectedCount = 0;
-
         const host =
             document.createElement("div");
 
+        host.innerHTML =
+            "<section><b>AAAA</b></section>";
+
         document.body.appendChild(host);
 
-        const range =
-            document.createRange();
+        const section =
+            host.firstChild;
 
-        range.selectNodeContents(host);
+        const oldChild =
+            section.firstChild;
 
-        cp(name + ":BEFORE_CREATE");
+        let calls = 0;
 
-        const fragment =
-            range.createContextualFragment(
-                "<v31-callback>" +
-                "callback" +
-                "</v31-callback>"
-            );
+        const observer =
+            new MutationObserver(records => {
 
-        cp(name + ":AFTER_CREATE");
+                calls++;
 
-        log(
-            "[E] constructors=" +
-            window.__v31ConstructorCount
+                cp(name + ":CALLBACK_ENTER");
+
+                if (calls === 1) {
+
+                    section.innerHTML =
+                        "<i>BBBB</i>";
+
+                    cp(name + ":SUBTREE_REPLACED");
+
+                    log(
+                        "[D] old connected=" +
+                        oldChild.isConnected
+                    );
+
+                    log(
+                        "[D] old text=" +
+                        oldChild.textContent
+                    );
+
+                    log(
+                        "[D] new text=" +
+                        section.textContent
+                    );
+                }
+
+                cp(name + ":CALLBACK_EXIT");
+            });
+
+        observer.observe(section, {
+            attributes:true,
+            childList:true,
+            subtree:true
+        });
+
+        section.setAttribute(
+            "data-v32",
+            "trigger"
         );
 
-        host.appendChild(fragment);
+        await sleep(75);
 
-        cp(name + ":AFTER_INSERT");
+        log("[D] callbacks=" + calls);
 
-        log(
-            "[E] connected callbacks=" +
-            window.__v31ConnectedCount
-        );
-
+        observer.disconnect();
         host.remove();
 
         cp(name + ":COMPLETE");
@@ -500,113 +411,179 @@ async function testE() {
 }
 
 
-/* --------------------------------
-   F — Trusted Types prerequisite
--------------------------------- */
+/*
+ * E
+ * Disconnect observer from inside callback,
+ * remove target, then continue using retained
+ * wrappers.
+ */
 
-async function testF() {
+async function testE() {
 
-    const name =
-        "F_TRUSTED_TYPES";
+    const name = "E_DISCONNECT_REENTRANT";
 
-    cp(name + ":START");
+    cp(name + ":CREATE");
 
     try {
 
-        if (
-            typeof window.trustedTypes
-            === "undefined"
-        ) {
+        const target =
+            document.createElement("div");
 
-            log(
-                "[F] Trusted Types unavailable"
-            );
+        target.innerHTML =
+            "<span>V32-E</span>";
 
-            log(
-                "[F] upstream 312244 path " +
-                "cannot be assumed reachable"
-            );
+        document.body.appendChild(target);
 
-            cp(
-                name +
-                ":UNAVAILABLE"
-            );
+        const retained =
+            target.firstChild;
 
-            good(name);
-            return;
-        }
+        let calls = 0;
+        let observer;
 
-        log(
-            "[F] Trusted Types PRESENT"
+        observer =
+            new MutationObserver(records => {
+
+                calls++;
+
+                cp(name + ":CALLBACK_ENTER");
+
+                observer.disconnect();
+
+                cp(name + ":DISCONNECTED");
+
+                target.remove();
+
+                cp(name + ":REMOVED");
+
+                log(
+                    "[E] records=" +
+                    records.length
+                );
+
+                log(
+                    "[E] target connected=" +
+                    target.isConnected
+                );
+
+                log(
+                    "[E] retained connected=" +
+                    retained.isConnected
+                );
+
+                log(
+                    "[E] retained text=" +
+                    retained.textContent
+                );
+
+                cp(name + ":CALLBACK_EXIT");
+            });
+
+        observer.observe(target, {
+            attributes:true,
+            childList:true,
+            subtree:true
+        });
+
+        target.setAttribute(
+            "data-trigger",
+            "1"
         );
 
-        log(
-            "[F] createPolicy=" +
-            typeof trustedTypes.createPolicy
+        await sleep(75);
+
+        log("[E] callbacks=" + calls);
+
+        if (calls !== 1)
+            bad(name, "callback count=" + calls);
+
+        cp(name + ":COMPLETE");
+        good(name);
+
+    } catch(e) {
+        caught(name, e);
+    }
+}
+
+
+/*
+ * F
+ * Observer callback causes a second mutation.
+ *
+ * We deliberately cap this at two callbacks.
+ */
+
+async function testF() {
+
+    const name = "F_REENTRANT_MUTATION";
+
+    cp(name + ":CREATE");
+
+    try {
+
+        const target =
+            document.createElement("div");
+
+        target.textContent = "V32-F";
+
+        document.body.appendChild(target);
+
+        let calls = 0;
+
+        const observer =
+            new MutationObserver(records => {
+
+                calls++;
+
+                cp(
+                    name +
+                    ":CALLBACK_" +
+                    calls
+                );
+
+                log(
+                    "[F] callback=" +
+                    calls +
+                    " records=" +
+                    records.length
+                );
+
+                if (calls === 1) {
+
+                    target.setAttribute(
+                        "data-second",
+                        "2"
+                    );
+
+                    cp(
+                        name +
+                        ":SECOND_MUTATION"
+                    );
+                }
+            });
+
+        observer.observe(target, {
+            attributes:true
+        });
+
+        target.setAttribute(
+            "data-first",
+            "1"
         );
 
-        if (
-            typeof trustedTypes.createPolicy
-            === "function"
-        ) {
+        await sleep(100);
 
-            const policy =
-                trustedTypes.createPolicy(
-                    "v31-" + Date.now(),
-                    {
-                        createHTML(input) {
-                            cp(
-                                name +
-                                ":CREATE_HTML_CALLBACK"
-                            );
+        log("[F] callbacks=" + calls);
 
-                            return input;
-                        }
-                    }
-                );
-
-            const trusted =
-                policy.createHTML(
-                    "<i>trusted-v31</i>"
-                );
-
-            log(
-                "[F] trusted object=" +
-                String(trusted)
+        if (calls !== 2) {
+            bad(
+                name,
+                "expected 2 deliveries, got " +
+                calls
             );
-
-            const host =
-                document.createElement("div");
-
-            document.body.appendChild(host);
-
-            const range =
-                document.createRange();
-
-            range.selectNodeContents(host);
-
-            cp(
-                name +
-                ":BEFORE_CONTEXTUAL_FRAGMENT"
-            );
-
-            const fragment =
-                range.createContextualFragment(
-                    trusted
-                );
-
-            cp(
-                name +
-                ":AFTER_CONTEXTUAL_FRAGMENT"
-            );
-
-            log(
-                "[F] fragment text=" +
-                fragment.textContent
-            );
-
-            host.remove();
         }
+
+        observer.disconnect();
+        target.remove();
 
         cp(name + ":COMPLETE");
         good(name);
@@ -620,8 +597,7 @@ async function testF() {
 async function run() {
 
     button.disabled = true;
-
-    out.textContent = "";
+    output.textContent = "";
 
     pass = 0;
     exceptions = 0;
@@ -630,26 +606,48 @@ async function run() {
     statusBox.textContent =
         "STATUS: RUNNING";
 
-    const old =
+    const previous =
         localStorage.getItem(
-            "PS5_V31_CP"
+            "PS5_V32_CP"
         );
 
-    if (old) {
+    if (previous) {
         log(
             "Previous checkpoint: " +
-            old
+            previous
         );
     }
 
-    log("PS5 13.60 — V31");
+    log("PS5 13.60 — V32");
     log(
-        "Range.createContextualFragment probe"
+        "MutationObserver Lifetime Probe"
     );
     log("");
 
     log(navigator.userAgent);
+
     log("");
+
+    log(
+        "MutationObserver=" +
+        typeof MutationObserver
+    );
+
+    if (
+        typeof MutationObserver
+        !== "function"
+    ) {
+
+        log(
+            "[UNSUPPORTED] MutationObserver"
+        );
+
+        statusBox.textContent =
+            "STATUS: UNSUPPORTED";
+
+        button.disabled = false;
+        return;
+    }
 
     await testA();
     await testB();
@@ -658,12 +656,13 @@ async function run() {
     await testE();
     await testF();
 
-    cp("V31:COMPLETE");
+    cp("V32:COMPLETE");
 
     log("");
     log("============================");
-    log("V31 RESULT");
+    log("V32 RESULT");
     log("============================");
+
     log("TESTS: 6");
     log("PASS: " + pass);
     log(
@@ -674,18 +673,13 @@ async function run() {
         "ANOMALIES: " +
         anomalies
     );
+
     log("============================");
 
-    if (
-        exceptions === 0 &&
-        anomalies === 0
-    ) {
-        statusBox.textContent =
-            "STATUS: NORMAL";
-    } else {
-        statusBox.textContent =
-            "STATUS: CHECK RESULT";
-    }
+    statusBox.textContent =
+        exceptions || anomalies
+        ? "STATUS: CHECK RESULT"
+        : "STATUS: NORMAL";
 
     button.disabled = false;
 }
