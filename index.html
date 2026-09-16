@@ -1,12 +1,12 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V30 MediaSource Lifecycle Probe</title>
+<title>PS5 13.60 - V26 SVG/SMIL Lifecycle Probe</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
-    font:15px monospace;
+    font:16px monospace;
     padding:18px;
 }
 button {
@@ -14,27 +14,27 @@ button {
     padding:10px 18px;
 }
 #status {
-    margin:15px 0;
-    padding:10px;
+    margin:16px 0;
+    padding:12px;
     border:1px solid #555;
 }
 pre {
     white-space:pre-wrap;
     word-break:break-word;
 }
-video {
+svg {
     position:absolute;
     left:-10000px;
     top:-10000px;
-    width:1px;
-    height:1px;
 }
 </style>
 
-<h2>PS5 13.60 — V30</h2>
-<div>MediaSource lifecycle / callback teardown probe</div>
+<h2>PS5 WebKit V26</h2>
+<div>SVG / SMIL lifecycle & re-entrancy probe</div>
 
-<p><button id="run">RUN V30</button></p>
+<p>
+<button id="run">RUN V26</button>
+</p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -42,707 +42,581 @@ video {
 <script>
 "use strict";
 
-const output = document.querySelector("#log");
+const logBox = document.querySelector("#log");
 const statusBox = document.querySelector("#status");
-const runButton = document.querySelector("#run");
+const NS = "http://www.w3.org/2000/svg";
 
 let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
-let unsupported = 0;
+let current = "NONE";
 
 function log(s) {
-    output.textContent += s + "\n";
+    logBox.textContent += s + "\n";
     console.log(s);
 }
 
-function cp(stage) {
+function checkpoint(name, stage) {
+    current = name + ":" + stage;
+
     try {
-        localStorage.setItem(
-            "PS5_V30_CHECKPOINT",
-            stage
-        );
+        localStorage.setItem("PS5_V26_CHECKPOINT", current);
     } catch (_) {}
 
-    log("[CP] " + stage);
+    log("[CP] " + current);
 }
 
-function good(name) {
+function ok(name) {
     pass++;
     log("[PASS] " + name);
 }
 
-function bad(name, reason) {
+function anomaly(name, text) {
     anomalies++;
-    log("[ANOMALY] " + name + " :: " + reason);
+    log("[ANOMALY] " + name + " :: " + text);
 }
 
-function caught(name, e) {
+function exception(name, e) {
     exceptions++;
     log("[EXCEPTION] " + name + " :: " + e);
 }
 
-function skip(name, why) {
-    unsupported++;
-    log("[UNSUPPORTED] " + name + " :: " + why);
+function svgElement(name) {
+    return document.createElementNS(NS, name);
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function state(ms) {
+function forceLayout(node) {
     try {
-        return ms.readyState;
-    } catch (e) {
-        return "THREW:" + e.name;
-    }
-}
-
-function makeVideo() {
-    const video = document.createElement("video");
-    video.muted = true;
-    video.preload = "none";
-    document.body.appendChild(video);
-    return video;
-}
-
-function cleanup(video, url) {
-    try {
-        if (video) {
-            video.removeAttribute("src");
-            video.load();
-            video.remove();
-        }
-    } catch (_) {}
-
-    try {
-        if (url)
-            URL.revokeObjectURL(url);
+        void node.getBoundingClientRect();
+        void document.body.offsetHeight;
     } catch (_) {}
 }
 
+function cleanup(node) {
+    try {
+        if (node && node.parentNode)
+            node.parentNode.removeChild(node);
+    } catch (_) {}
+}
 
-/*
- * A — Basic attach / detach.
- */
+async function delay(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+
+/* ---------------------------------------------------------
+   A - remove animation target from beginEvent
+   --------------------------------------------------------- */
 
 async function testA() {
 
-    const name = "A_BASIC_ATTACH";
+    const name = "A_REMOVE_TARGET_BEGIN";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, rect, anim;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
+        svg.setAttribute("width", "100");
+        svg.setAttribute("height", "100");
 
-        video = makeVideo();
+        rect = svgElement("rect");
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
 
-        url = URL.createObjectURL(ms);
+        anim = svgElement("animate");
 
-        log("[A] initial=" + state(ms));
+        anim.setAttribute("attributeName", "x");
+        anim.setAttribute("from", "0");
+        anim.setAttribute("to", "50");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
 
-        cp(name + ":SET_SRC");
+        rect.appendChild(anim);
+        svg.appendChild(rect);
+        document.body.appendChild(svg);
 
-        video.src = url;
+        let fired = false;
 
-        video.load();
+        anim.addEventListener("beginEvent", function () {
 
-        await sleep(150);
+            fired = true;
 
-        log("[A] after attach=" + state(ms));
+            checkpoint(name, "BEGIN_ENTER");
 
-        cp(name + ":DETACH");
+            rect.remove();
 
-        video.removeAttribute("src");
-        video.load();
+            checkpoint(name, "TARGET_REMOVED");
 
-        await sleep(100);
+            /* retained references */
+            void rect.ownerDocument;
+            void anim.ownerDocument;
 
-        log("[A] after detach=" + state(ms));
+            forceLayout(svg);
 
-        cp(name + ":READ_RETAINED");
+            checkpoint(name, "BEGIN_EXIT");
+        });
 
-        log(
-            "[A] retained readyState=" +
-            state(ms)
-        );
+        checkpoint(name, "BEGIN_CALL");
 
-        cp(name + ":COMPLETE");
+        anim.beginElement();
 
-        good(name);
+        await delay(120);
+
+        checkpoint(name, "VERIFY");
+
+        if (!fired)
+            log("[INFO] beginEvent not dispatched");
+
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
-/*
- * B — Revoke object URL while attached.
- */
+/* ---------------------------------------------------------
+   B - remove entire SVG tree from animation callback
+   --------------------------------------------------------- */
 
 async function testB() {
 
-    const name = "B_REVOKE_ATTACHED";
+    const name = "B_REMOVE_SVG_BEGIN";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, path, anim;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
 
-        video = makeVideo();
+        path = svgElement("path");
+        path.setAttribute("d", "M0 0 L50 50");
 
-        url = URL.createObjectURL(ms);
+        anim = svgElement("animate");
 
-        video.src = url;
-        video.load();
+        anim.setAttribute("attributeName", "opacity");
+        anim.setAttribute("from", "1");
+        anim.setAttribute("to", "0");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
 
-        await sleep(100);
+        path.appendChild(anim);
+        svg.appendChild(path);
+        document.body.appendChild(svg);
 
-        cp(name + ":BEFORE_REVOKE");
+        anim.addEventListener("beginEvent", function () {
 
-        log(
-            "[B] before revoke=" +
-            state(ms)
-        );
+            checkpoint(name, "CALLBACK_ENTER");
 
-        URL.revokeObjectURL(url);
+            svg.remove();
 
-        url = null;
+            checkpoint(name, "SVG_REMOVED");
 
-        cp(name + ":AFTER_REVOKE");
+            /* Read retained wrappers after removal. */
+            void path.getAttribute("d");
+            void anim.getAttribute("dur");
 
-        log(
-            "[B] after revoke=" +
-            state(ms)
-        );
+            forceLayout(document.body);
 
-        /*
-         * Retain both wrappers and perform
-         * ordinary observable reads.
-         */
+            checkpoint(name, "CALLBACK_EXIT");
+        });
 
-        log(
-            "[B] video.src length=" +
-            video.src.length
-        );
+        anim.beginElement();
 
-        log(
-            "[B] mediaSource state=" +
-            state(ms)
-        );
+        await delay(120);
 
-        await sleep(150);
+        checkpoint(name, "VERIFY");
 
-        cp(name + ":COMPLETE");
-
-        good(name);
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
-/*
- * C — Remove media element from sourceopen.
- */
+/* ---------------------------------------------------------
+   C - replace target subtree during callback
+   --------------------------------------------------------- */
 
 async function testC() {
 
-    const name = "C_REMOVE_ON_SOURCEOPEN";
+    const name = "C_REPLACE_SUBTREE";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, group, rect, anim;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
+        group = svgElement("g");
+        rect = svgElement("rect");
 
-        video = makeVideo();
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
 
-        url = URL.createObjectURL(ms);
+        anim = svgElement("animate");
 
-        let opened = 0;
+        anim.setAttribute("attributeName", "width");
+        anim.setAttribute("from", "20");
+        anim.setAttribute("to", "80");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
 
-        ms.addEventListener(
-            "sourceopen",
-            function() {
+        rect.appendChild(anim);
+        group.appendChild(rect);
+        svg.appendChild(group);
+        document.body.appendChild(svg);
 
-                opened++;
+        anim.addEventListener("beginEvent", function () {
 
-                cp(
-                    name +
-                    ":SOURCEOPEN_ENTER"
-                );
+            checkpoint(name, "CALLBACK_ENTER");
 
-                log(
-                    "[C] sourceopen #" +
-                    opened +
-                    " state=" +
-                    state(ms)
-                );
+            const oldRect = rect;
 
-                /*
-                 * Synchronous DOM teardown while
-                 * sourceopen is being delivered.
-                 */
+            group.textContent = "";
 
-                video.remove();
+            checkpoint(name, "SUBTREE_CLEARED");
 
-                cp(
-                    name +
-                    ":VIDEO_REMOVED"
-                );
+            const replacement = svgElement("circle");
+            replacement.setAttribute("r", "10");
 
-                log(
-                    "[C] video connected=" +
-                    video.isConnected
-                );
+            group.appendChild(replacement);
 
-                log(
-                    "[C] retained MS=" +
-                    state(ms)
-                );
+            /* retained old wrapper */
+            void oldRect.ownerSVGElement;
+            void anim.ownerSVGElement;
 
-                /*
-                 * Ordinary DOM work while retained
-                 * references are alive.
-                 */
+            forceLayout(svg);
 
-                const marker =
-                    document.createElement("div");
+            checkpoint(name, "CALLBACK_EXIT");
+        });
 
-                marker.textContent =
-                    "v30-marker";
+        anim.beginElement();
 
-                document.body.appendChild(marker);
+        await delay(120);
 
-                void marker.offsetHeight;
+        checkpoint(name, "VERIFY");
 
-                marker.remove();
-
-                cp(
-                    name +
-                    ":SOURCEOPEN_EXIT"
-                );
-            }
-        );
-
-        cp(name + ":SET_SRC");
-
-        video.src = url;
-        video.load();
-
-        await sleep(500);
-
-        log(
-            "[C] sourceopen count=" +
-            opened
-        );
-
-        log(
-            "[C] final state=" +
-            state(ms)
-        );
-
-        cp(name + ":COMPLETE");
-
-        good(name);
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
-/*
- * D — Detach src from sourceopen callback.
- */
+/* ---------------------------------------------------------
+   D - reparent animation element during callback
+   --------------------------------------------------------- */
 
 async function testD() {
 
-    const name = "D_DETACH_ON_SOURCEOPEN";
+    const name = "D_REPARENT_ANIMATION";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, a, b, anim;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
 
-        video = makeVideo();
+        a = svgElement("rect");
+        b = svgElement("rect");
 
-        url = URL.createObjectURL(ms);
+        a.setAttribute("width", "20");
+        b.setAttribute("width", "30");
 
-        let opened = 0;
+        anim = svgElement("animate");
 
-        ms.addEventListener(
-            "sourceopen",
-            function() {
+        anim.setAttribute("attributeName", "width");
+        anim.setAttribute("from", "20");
+        anim.setAttribute("to", "60");
+        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("begin", "indefinite");
 
-                opened++;
+        a.appendChild(anim);
 
-                cp(
-                    name +
-                    ":SOURCEOPEN_ENTER"
-                );
+        svg.appendChild(a);
+        svg.appendChild(b);
 
-                log(
-                    "[D] enter state=" +
-                    state(ms)
-                );
+        document.body.appendChild(svg);
 
-                video.removeAttribute("src");
+        anim.addEventListener("beginEvent", function () {
 
-                cp(
-                    name +
-                    ":SRC_REMOVED"
-                );
+            checkpoint(name, "CALLBACK_ENTER");
 
-                video.load();
+            b.appendChild(anim);
 
-                cp(
-                    name +
-                    ":LOAD_CALLED"
-                );
+            checkpoint(name, "ANIMATION_REPARENTED");
 
-                log(
-                    "[D] callback state=" +
-                    state(ms)
-                );
+            void a.getBoundingClientRect();
+            void b.getBoundingClientRect();
 
-                log(
-                    "[D] video.src=" +
-                    video.src
-                );
+            forceLayout(svg);
 
-                cp(
-                    name +
-                    ":SOURCEOPEN_EXIT"
-                );
-            }
-        );
+            checkpoint(name, "CALLBACK_EXIT");
+        });
 
-        video.src = url;
-        video.load();
+        anim.beginElement();
 
-        await sleep(500);
+        await delay(120);
 
-        log(
-            "[D] sourceopen count=" +
-            opened
-        );
+        checkpoint(name, "VERIFY");
 
-        log(
-            "[D] final state=" +
-            state(ms)
-        );
-
-        cp(name + ":COMPLETE");
-
-        good(name);
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
-/*
- * E — Remove + reattach same video.
- */
+/* ---------------------------------------------------------
+   E - animation end callback removes parent
+   --------------------------------------------------------- */
 
 async function testE() {
 
-    const name = "E_REMOVE_REATTACH";
+    const name = "E_REMOVE_PARENT_END";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, group, rect, anim;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
+        group = svgElement("g");
+        rect = svgElement("rect");
 
-        video = makeVideo();
+        rect.setAttribute("width", "20");
+        rect.setAttribute("height", "20");
 
-        url = URL.createObjectURL(ms);
+        anim = svgElement("animate");
 
-        video.src = url;
-        video.load();
+        anim.setAttribute("attributeName", "opacity");
+        anim.setAttribute("from", "1");
+        anim.setAttribute("to", "0");
+        anim.setAttribute("dur", "0.03s");
+        anim.setAttribute("begin", "indefinite");
 
-        await sleep(120);
+        rect.appendChild(anim);
+        group.appendChild(rect);
+        svg.appendChild(group);
 
-        cp(name + ":REMOVE_VIDEO");
+        document.body.appendChild(svg);
 
-        video.remove();
+        anim.addEventListener("endEvent", function () {
 
-        log(
-            "[E] connected after remove=" +
-            video.isConnected
-        );
+            checkpoint(name, "END_ENTER");
 
-        log(
-            "[E] MS after remove=" +
-            state(ms)
-        );
+            group.remove();
 
-        await sleep(50);
+            checkpoint(name, "GROUP_REMOVED");
 
-        cp(name + ":REATTACH_VIDEO");
+            void rect.ownerDocument;
+            void anim.ownerDocument;
 
-        document.body.appendChild(video);
+            forceLayout(svg);
 
-        log(
-            "[E] connected after attach=" +
-            video.isConnected
-        );
+            checkpoint(name, "END_EXIT");
+        });
 
-        void video.offsetHeight;
+        anim.beginElement();
 
-        await sleep(150);
+        await delay(150);
 
-        log(
-            "[E] final MS=" +
-            state(ms)
-        );
+        checkpoint(name, "VERIFY");
 
-        cp(name + ":COMPLETE");
-
-        good(name);
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
-/*
- * F — Retain MediaSource after full teardown.
- */
+/* ---------------------------------------------------------
+   F - nested/re-entrant animation start
+   --------------------------------------------------------- */
 
 async function testF() {
 
-    const name = "F_RETAIN_AFTER_TEARDOWN";
+    const name = "F_NESTED_BEGIN";
 
-    cp(name + ":CREATE");
+    checkpoint(name, "CREATE");
 
-    let video = null;
-    let url = null;
+    let svg, r1, r2, a1, a2;
 
     try {
 
-        const ms = new MediaSource();
+        svg = svgElement("svg");
 
-        video = makeVideo();
+        r1 = svgElement("rect");
+        r2 = svgElement("rect");
 
-        url = URL.createObjectURL(ms);
+        r1.setAttribute("width", "10");
+        r2.setAttribute("width", "10");
 
-        video.src = url;
-        video.load();
+        a1 = svgElement("animate");
+        a2 = svgElement("animate");
 
-        await sleep(120);
+        for (const a of [a1, a2]) {
 
-        cp(name + ":TEARDOWN");
-
-        video.removeAttribute("src");
-        video.load();
-        video.remove();
-
-        URL.revokeObjectURL(url);
-        url = null;
-
-        await sleep(100);
-
-        cp(name + ":READ_RETAINED");
-
-        log(
-            "[F] readyState=" +
-            state(ms)
-        );
-
-        log(
-            "[F] sourceBuffers length=" +
-            ms.sourceBuffers.length
-        );
-
-        log(
-            "[F] activeSourceBuffers length=" +
-            ms.activeSourceBuffers.length
-        );
-
-        /*
-         * Ordinary allocations only — not a heap
-         * reclamation/spray operation.
-         */
-
-        const temp = [];
-
-        for (let i = 0; i < 100; i++) {
-            temp.push({
-                id:i,
-                text:"v30-" + i
-            });
+            a.setAttribute("attributeName", "width");
+            a.setAttribute("from", "10");
+            a.setAttribute("to", "50");
+            a.setAttribute("dur", "0.05s");
+            a.setAttribute("begin", "indefinite");
         }
 
-        log(
-            "[F] ordinary objects=" +
-            temp.length
-        );
+        r1.appendChild(a1);
+        r2.appendChild(a2);
 
-        log(
-            "[F] retained state again=" +
-            state(ms)
-        );
+        svg.appendChild(r1);
+        svg.appendChild(r2);
 
-        cp(name + ":COMPLETE");
+        document.body.appendChild(svg);
 
-        good(name);
+        let nested = false;
+
+        a1.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "A1_ENTER");
+
+            if (!nested) {
+
+                nested = true;
+
+                checkpoint(name, "START_A2");
+
+                a2.beginElement();
+            }
+
+            r1.remove();
+
+            checkpoint(name, "R1_REMOVED");
+
+            forceLayout(svg);
+
+            checkpoint(name, "A1_EXIT");
+        });
+
+        a2.addEventListener("beginEvent", function () {
+
+            checkpoint(name, "A2_ENTER");
+
+            void r1.ownerDocument;
+            void r2.ownerDocument;
+
+            forceLayout(svg);
+
+            checkpoint(name, "A2_EXIT");
+        });
+
+        a1.beginElement();
+
+        await delay(150);
+
+        checkpoint(name, "VERIFY");
+
+        ok(name);
 
     } catch(e) {
 
-        caught(name, e);
+        exception(name, e);
 
     } finally {
 
-        cleanup(video, url);
+        cleanup(svg);
     }
 }
 
 
 async function run() {
 
-    runButton.disabled = true;
-
-    output.textContent = "";
+    document.querySelector("#run").disabled = true;
 
     pass = 0;
     exceptions = 0;
     anomalies = 0;
-    unsupported = 0;
 
-    statusBox.textContent =
-        "STATUS: RUNNING";
+    logBox.textContent = "";
 
-    const previous =
-        localStorage.getItem(
-            "PS5_V30_CHECKPOINT"
-        );
+    const old = localStorage.getItem("PS5_V26_CHECKPOINT");
 
-    if (previous) {
-        log(
-            "Previous checkpoint: " +
-            previous
-        );
-    }
+    if (old)
+        log("Previous checkpoint: " + old);
 
-    log("PS5 13.60 - V30");
+    log("User agent:");
     log(navigator.userAgent);
     log("");
 
-    log(
-        "MediaSource: " +
-        typeof MediaSource
-    );
-
-    log(
-        "URL.createObjectURL: " +
-        typeof URL.createObjectURL
-    );
+    log("SVGElement: " + typeof SVGElement);
+    log("SVGPathElement: " + typeof SVGPathElement);
+    log("SVGAnimationElement: " + typeof SVGAnimationElement);
 
     log("");
+    log("Starting V26...");
+    log("");
 
-    if (
-        typeof MediaSource !==
-        "function"
-    ) {
+    await testA();
+    await testB();
+    await testC();
+    await testD();
+    await testE();
+    await testF();
 
-        skip(
-            "V30",
-            "MediaSource unavailable"
-        );
+    checkpoint("V26", "COMPLETE");
 
-    } else {
-
-        await testA();
-        await testB();
-        await testC();
-        await testD();
-        await testE();
-        await testF();
-    }
-
-    cp("V30:COMPLETE");
+    statusBox.textContent =
+        anomalies || exceptions ?
+        "STATUS: ANOMALY" :
+        "STATUS: NORMAL";
 
     log("");
     log("==============================");
-    log("V30 RESULT");
-    log("==============================");
-
-    log(
-        "TESTS COMPLETED: " +
-        (
-            pass +
-            exceptions
-        )
-    );
-
+    log("TESTS COMPLETED: 6");
     log("PASS: " + pass);
     log("EXCEPTIONS: " + exceptions);
     log("ANOMALIES: " + anomalies);
-    log("UNSUPPORTED: " + unsupported);
-
     log("==============================");
 
-    statusBox.textContent =
-        exceptions || anomalies
-        ? "STATUS: CHECK RESULT"
-        : unsupported
-        ? "STATUS: UNSUPPORTED"
-        : "STATUS: NORMAL";
-
-    runButton.disabled = false;
+    document.querySelector("#run").disabled = false;
 }
 
-runButton.onclick = run;
+document.querySelector("#run").onclick = run;
 </script>
