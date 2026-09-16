@@ -1,6 +1,8 @@
 <!doctype html>
+<html>
+<head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V21 Range Lifetime Probe</title>
+<title>PS5 13.60 — V21.1 Detached Range Diagnostic</title>
 
 <style>
 body {
@@ -10,23 +12,29 @@ body {
     padding:18px;
 }
 button {
-    padding:10px;
     font:16px monospace;
+    padding:10px;
+    margin-right:8px;
 }
 #log {
-    margin-top:12px;
-    padding:14px;
     background:#17233a;
+    padding:14px;
+    margin-top:12px;
     white-space:pre-wrap;
 }
-.ok { color:#59ff7a }
-.bad { color:#ff6868 }
-.info { color:#63caff }
+.ok   { color:#59ff7a; }
+.bad  { color:#ff6868; }
+.info { color:#63caff; }
+.warn { color:#ffd166; }
 </style>
+</head>
 
-<h2>PS5 13.60 — V21 Range Lifetime Probe</h2>
+<body>
 
-<button onclick="run()">RUN V21</button>
+<h2>PS5 13.60 — V21.1 Detached Range Diagnostic</h2>
+
+<button onclick="runV211()">RUN V21.1</button>
+<button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
 <div id="sandbox"></div>
@@ -34,450 +42,501 @@ button {
 <script>
 "use strict";
 
-const KEY = "PS5_V21_CP";
+const KEY = "PS5_V211_CP";
 
-const out =
+const logBox =
     document.getElementById("log");
 
 const sandbox =
     document.getElementById("sandbox");
 
-let tests = 0;
-let pass = 0;
-let exceptions = 0;
-let anomalies = 0;
+let seq = 0;
 
-function log(x, c="") {
-    const d = document.createElement("div");
-    d.textContent = x;
-    d.className = c;
-    out.appendChild(d);
+function log(text, cls="") {
+
+    const d =
+        document.createElement("div");
+
+    d.textContent = text;
+    d.className = cls;
+
+    logBox.appendChild(d);
 }
 
-function cp(test, phase) {
+function checkpoint(phase, detail="") {
+
+    seq++;
+
+    const record = {
+        status:"RUNNING",
+        phase:phase,
+        detail:detail,
+        sequence:seq,
+        time:Date.now()
+    };
 
     try {
         localStorage.setItem(
             KEY,
-            JSON.stringify({
-                state:"RUNNING",
-                test:test,
-                phase:phase,
-                time:Date.now()
-            })
+            JSON.stringify(record)
         );
     } catch(e) {}
 
     log(
-        "[" + test + "] " + phase,
+        seq + ": " +
+        phase +
+        (detail ? " — " + detail : ""),
         "info"
     );
+}
+
+function clearCP() {
+
+    try {
+        localStorage.removeItem(KEY);
+    } catch(e) {}
+
+    log("Checkpoint cleared.", "warn");
 }
 
 function previous() {
 
     try {
 
+        const raw =
+            localStorage.getItem(KEY);
+
+        if (!raw)
+            return;
+
         const x =
-            JSON.parse(
-                localStorage.getItem(KEY)
-            );
+            JSON.parse(raw);
 
-        if (
-            x &&
-            x.state === "RUNNING"
-        ) {
+        if (x.status !== "RUNNING")
+            return;
 
+        log(
+            "******************************",
+            "bad"
+        );
+
+        log(
+            "PREVIOUS V21.1 DID NOT COMPLETE",
+            "bad"
+        );
+
+        log(
+            "LAST PHASE: " + x.phase,
+            "bad"
+        );
+
+        if (x.detail)
             log(
-                "PREVIOUS V21 DID NOT COMPLETE",
+                "DETAIL: " + x.detail,
                 "bad"
             );
 
-            log(
-                "TEST: " + x.test,
-                "bad"
-            );
-
-            log(
-                "LAST PHASE: " + x.phase,
-                "bad"
-            );
-        }
+        log(
+            "******************************",
+            "bad"
+        );
 
     } catch(e) {}
 }
 
-function finish() {
-
-    localStorage.setItem(
-        KEY,
-        JSON.stringify({
-            state:"COMPLETE"
-        })
-    );
-}
-
-function resetDOM() {
-
-    sandbox.innerHTML =
-        "<div id='root'>" +
-            "<div id='a'>" +
-                "<span>AAAA</span>" +
-                "<b>BBBB</b>" +
-            "</div>" +
-            "<div id='b'>" +
-                "<i>CCCC</i>" +
-                "<em>DDDD</em>" +
-            "</div>" +
-        "</div>";
-}
-
-function execute(name, fn) {
-
-    tests++;
-
-    cp(name,"START");
+function complete() {
 
     try {
 
-        resetDOM();
+        localStorage.setItem(
+            KEY,
+            JSON.stringify({
+                status:"COMPLETE",
+                time:Date.now()
+            })
+        );
 
-        cp(name,"DOM_READY");
+    } catch(e) {}
+}
 
-        fn();
+function delay(ms) {
 
-        cp(name,"COMPLETE");
+    return new Promise(
+        resolve => setTimeout(resolve, ms)
+    );
+}
 
-        pass++;
+function nodeDescription(node) {
+
+    if (!node)
+        return "NULL";
+
+    let result =
+        "type=" + node.nodeType +
+        " name=" + node.nodeName;
+
+    if (node.nodeType === 3) {
+
+        result +=
+            ' data="' +
+            node.data +
+            '"';
+    }
+
+    if (node.id)
+        result +=
+            " id=" + node.id;
+
+    return result;
+}
+
+function rangeSnapshot(label, range) {
+
+    let text;
+
+    try {
+        text = range.toString();
+    } catch(e) {
+        text =
+            "[toString exception: " +
+            e.name + "]";
+    }
+
+    log(
+        "----- " + label + " -----",
+        "warn"
+    );
+
+    try {
+
+        log(
+            "text = [" + text + "]"
+        );
+
+        log(
+            "collapsed = " +
+            range.collapsed
+        );
+
+        log(
+            "startOffset = " +
+            range.startOffset
+        );
+
+        log(
+            "endOffset = " +
+            range.endOffset
+        );
+
+        log(
+            "startContainer = " +
+            nodeDescription(
+                range.startContainer
+            )
+        );
+
+        log(
+            "endContainer = " +
+            nodeDescription(
+                range.endContainer
+            )
+        );
+
+        log(
+            "commonAncestor = " +
+            nodeDescription(
+                range.commonAncestorContainer
+            )
+        );
 
     } catch(e) {
 
-        exceptions++;
-
         log(
-            "[" + name + "] " +
+            "SNAPSHOT EXCEPTION: " +
             e.name + ": " +
-            e.message
-        );
-    }
-}
-
-/*
- * 1 — Extract a range spanning
- * different branches.
- */
-
-function extractCrossBranch() {
-
-    const root =
-        sandbox.querySelector("#root");
-
-    const a =
-        sandbox.querySelector("#a span")
-               .firstChild;
-
-    const b =
-        sandbox.querySelector("#b em")
-               .firstChild;
-
-    const r =
-        document.createRange();
-
-    r.setStart(a,1);
-    r.setEnd(b,3);
-
-    cp(
-        "A_EXTRACT",
-        "BEFORE_EXTRACT"
-    );
-
-    const frag =
-        r.extractContents();
-
-    cp(
-        "A_EXTRACT",
-        "AFTER_EXTRACT"
-    );
-
-    if (!frag)
-        anomalies++;
-
-    void root.offsetHeight;
-}
-
-/*
- * 2 — Clone while DOM changes.
- */
-
-function cloneThenRemove() {
-
-    const root =
-        sandbox.querySelector("#root");
-
-    const a =
-        sandbox.querySelector("#a");
-
-    const b =
-        sandbox.querySelector("#b");
-
-    const r =
-        document.createRange();
-
-    r.setStartBefore(a);
-    r.setEndAfter(b);
-
-    cp(
-        "B_CLONE_REMOVE",
-        "BEFORE_CLONE"
-    );
-
-    const clone =
-        r.cloneContents();
-
-    cp(
-        "B_CLONE_REMOVE",
-        "REMOVE_CONTAINER"
-    );
-
-    root.remove();
-
-    cp(
-        "B_CLONE_REMOVE",
-        "AFTER_REMOVE"
-    );
-
-    if (!clone)
-        anomalies++;
-}
-
-/*
- * 3 — Keep Range alive after
- * its subtree is detached.
- */
-
-function detachedRange() {
-
-    const root =
-        sandbox.querySelector("#root");
-
-    const text =
-        sandbox.querySelector("#a span")
-               .firstChild;
-
-    const r =
-        document.createRange();
-
-    r.setStart(text,0);
-    r.setEnd(text,4);
-
-    cp(
-        "C_DETACHED",
-        "DETACH_ROOT"
-    );
-
-    root.remove();
-
-    cp(
-        "C_DETACHED",
-        "READ_RANGE"
-    );
-
-    const value =
-        r.toString();
-
-    if (value !== "AAAA") {
-
-        anomalies++;
-
-        log(
-            "Detached Range mismatch: " +
-            value,
+            e.message,
             "bad"
         );
     }
 }
 
-/*
- * 4 — Delete contents spanning
- * several ancestors.
- */
+async function runV211() {
 
-function deleteCrossBranch() {
-
-    const root =
-        sandbox.querySelector("#root");
-
-    const t1 =
-        sandbox.querySelector("#a span")
-               .firstChild;
-
-    const t2 =
-        sandbox.querySelector("#b em")
-               .firstChild;
-
-    const r =
-        document.createRange();
-
-    r.setStart(t1,2);
-    r.setEnd(t2,2);
-
-    cp(
-        "D_DELETE",
-        "BEFORE_DELETE"
-    );
-
-    r.deleteContents();
-
-    cp(
-        "D_DELETE",
-        "AFTER_DELETE"
-    );
-
-    void root.offsetHeight;
-}
-
-/*
- * 5 — Extract then mutate the
- * surviving Range/container.
- */
-
-function extractAndMutate() {
-
-    const root =
-        sandbox.querySelector("#root");
-
-    const a =
-        sandbox.querySelector("#a");
-
-    const b =
-        sandbox.querySelector("#b");
-
-    const r =
-        document.createRange();
-
-    r.setStartBefore(a);
-    r.setEndAfter(b);
-
-    cp(
-        "E_EXTRACT_MUTATE",
-        "EXTRACT"
-    );
-
-    const fragment =
-        r.extractContents();
-
-    cp(
-        "E_EXTRACT_MUTATE",
-        "MUTATE"
-    );
-
-    root.appendChild(
-        document.createTextNode(
-            "replacement"
-        )
-    );
-
-    cp(
-        "E_EXTRACT_MUTATE",
-        "READ_RANGE"
-    );
-
-    r.toString();
-
-    if (!fragment)
-        anomalies++;
-}
-
-async function run() {
-
-    out.innerHTML = "";
+    logBox.innerHTML = "";
 
     previous();
 
-    tests = 0;
-    pass = 0;
-    exceptions = 0;
-    anomalies = 0;
+    seq = 0;
 
     log(
-        "V21 START",
+        "V21.1 START",
         "info"
     );
 
     log(navigator.userAgent);
     log("");
 
-    execute(
-        "A_EXTRACT",
-        extractCrossBranch
-    );
+    try {
 
-    await new Promise(
-        r => setTimeout(r,100)
-    );
+        checkpoint(
+            "CREATE_DOM"
+        );
 
-    execute(
-        "B_CLONE_REMOVE",
-        cloneThenRemove
-    );
+        sandbox.innerHTML =
+            '<div id="outside">OUTSIDE</div>' +
+            '<div id="root">' +
+                '<div id="parent">' +
+                    '<span id="span">AAAA</span>' +
+                    '<b id="bold">BBBB</b>' +
+                '</div>' +
+            '</div>';
 
-    await new Promise(
-        r => setTimeout(r,100)
-    );
+        const root =
+            document.getElementById("root");
 
-    execute(
-        "C_DETACHED",
-        detachedRange
-    );
+        const parent =
+            document.getElementById("parent");
 
-    await new Promise(
-        r => setTimeout(r,100)
-    );
+        const span =
+            document.getElementById("span");
 
-    execute(
-        "D_DELETE",
-        deleteCrossBranch
-    );
+        const text =
+            span.firstChild;
 
-    await new Promise(
-        r => setTimeout(r,100)
-    );
+        /*
+         * Keep explicit JS references to all
+         * relevant nodes after detachment.
+         */
 
-    execute(
-        "E_EXTRACT_MUTATE",
-        extractAndMutate
-    );
+        checkpoint(
+            "CREATE_RANGE"
+        );
 
-    finish();
+        const range =
+            document.createRange();
 
-    log("");
-    log(
-        "======= V21 RESULT =======",
-        "info"
-    );
+        range.setStart(
+            text,
+            0
+        );
 
-    log(
-        "STATUS: " +
-        (
-            anomalies === 0
-                ? "NORMAL"
-                : "ANOMALY"
-        ),
-        anomalies === 0
-            ? "ok"
-            : "bad"
-    );
+        range.setEnd(
+            text,
+            text.length
+        );
 
-    log("TESTS: " + tests);
-    log("PASS: " + pass);
-    log("EXCEPTIONS: " + exceptions);
-    log("ANOMALIES: " + anomalies);
+        checkpoint(
+            "BEFORE_REMOVE"
+        );
 
-    log(
-        "==========================",
-        "info"
-    );
+        rangeSnapshot(
+            "BEFORE REMOVE",
+            range
+        );
+
+        log(
+            "text.data before = [" +
+            text.data +
+            "]"
+        );
+
+        log(
+            "root.isConnected before = " +
+            root.isConnected
+        );
+
+        log(
+            "text.isConnected before = " +
+            text.isConnected
+        );
+
+        /*
+         * This is the exact operation that
+         * produced the V21 mismatch.
+         */
+
+        checkpoint(
+            "REMOVE_ROOT"
+        );
+
+        root.remove();
+
+        checkpoint(
+            "IMMEDIATELY_AFTER_REMOVE"
+        );
+
+        rangeSnapshot(
+            "IMMEDIATELY AFTER REMOVE",
+            range
+        );
+
+        log(
+            "text.data after = [" +
+            text.data +
+            "]"
+        );
+
+        log(
+            "root.isConnected after = " +
+            root.isConnected
+        );
+
+        log(
+            "parent.isConnected after = " +
+            parent.isConnected
+        );
+
+        log(
+            "text.isConnected after = " +
+            text.isConnected
+        );
+
+        /*
+         * Check again after the current
+         * synchronous JS execution finishes.
+         */
+
+        checkpoint(
+            "BEFORE_MICROTASK"
+        );
+
+        await Promise.resolve();
+
+        checkpoint(
+            "AFTER_MICROTASK"
+        );
+
+        rangeSnapshot(
+            "AFTER MICROTASK",
+            range
+        );
+
+        log(
+            "detached text.data = [" +
+            text.data +
+            "]"
+        );
+
+        /*
+         * And once more after an event-loop
+         * turn.
+         */
+
+        checkpoint(
+            "BEFORE_DELAY"
+        );
+
+        await delay(100);
+
+        checkpoint(
+            "AFTER_100MS"
+        );
+
+        rangeSnapshot(
+            "AFTER 100MS",
+            range
+        );
+
+        log(
+            "detached text.data = [" +
+            text.data +
+            "]"
+        );
+
+        /*
+         * Directly verify that our retained
+         * detached node remains coherent.
+         */
+
+        checkpoint(
+            "DETACHED_NODE_INTEGRITY"
+        );
+
+        let nodeOK =
+            text.data === "AAAA" &&
+            text.parentNode === span &&
+            span.parentNode === parent &&
+            parent.parentNode === root &&
+            root.isConnected === false;
+
+        log(
+            "Detached subtree integrity = " +
+            (nodeOK ? "OK" : "UNEXPECTED"),
+            nodeOK ? "ok" : "bad"
+        );
+
+        checkpoint(
+            "FINAL_RANGE_READ"
+        );
+
+        let finalText =
+            range.toString();
+
+        log(
+            "FINAL range.toString() = [" +
+            finalText +
+            "]"
+        );
+
+        complete();
+
+        log("");
+        log(
+            "======= V21.1 RESULT =======",
+            "info"
+        );
+
+        log(
+            "COMPLETED: YES",
+            "ok"
+        );
+
+        log(
+            "DETACHED NODE TEXT: [" +
+            text.data +
+            "]"
+        );
+
+        log(
+            "RANGE TEXT: [" +
+            finalText +
+            "]"
+        );
+
+        log(
+            "NODE INTEGRITY: " +
+            (nodeOK ? "OK" : "UNEXPECTED"),
+            nodeOK ? "ok" : "bad"
+        );
+
+        log(
+            "============================",
+            "info"
+        );
+
+    } catch(e) {
+
+        checkpoint(
+            "EXCEPTION",
+            e.name + ": " + e.message
+        );
+
+        log("");
+        log(
+            "V21.1 STOPPED",
+            "bad"
+        );
+
+        log(
+            e.name + ": " +
+            e.message,
+            "bad"
+        );
+    }
 }
 
 previous();
+
 </script>
+</body>
+</html>
