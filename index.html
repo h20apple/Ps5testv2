@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V35.3 TransformStream Iterator Mapper</title>
+<title>PS5 13.60 - V35.4 TransformStream Targeted Substitution</title>
 
 <style>
 body {
@@ -24,10 +24,10 @@ pre {
 }
 </style>
 
-<h2>PS5 13.60 — V35.3</h2>
-<p>TransformStream internal Array iterator mapper</p>
+<h2>PS5 13.60 — V35.4</h2>
+<p>TransformStream targeted iterator substitution</p>
 
-<button id="run">RUN V35.3</button>
+<button id="run">RUN V35.4</button>
 <div id="status">READY</div>
 <pre id="log"></pre>
 
@@ -41,8 +41,24 @@ const button = document.querySelector("#run");
 const originalIterator =
     Array.prototype[Symbol.iterator];
 
+let iteratorCalls = 0;
+let nextCalls = 0;
+let substitutions = 0;
+
 function log(x) {
     out.textContent += x + "\n";
+    console.log(x);
+}
+
+function checkpoint(x) {
+    try {
+        localStorage.setItem(
+            "V354_CHECKPOINT",
+            x
+        );
+    } catch (_) {}
+
+    log("[CP] " + x);
 }
 
 function restore() {
@@ -50,15 +66,17 @@ function restore() {
         originalIterator;
 }
 
-function safeType(v) {
+function showPrevious() {
+    try {
+        const x =
+            localStorage.getItem(
+                "V354_CHECKPOINT"
+            );
 
-    if (v === null)
-        return "null";
+        if (x)
+            log("PREVIOUS CHECKPOINT: " + x);
 
-    if (Array.isArray(v))
-        return "array";
-
-    return typeof v;
+    } catch (_) {}
 }
 
 function run() {
@@ -66,19 +84,21 @@ function run() {
     button.disabled = true;
     out.textContent = "";
 
+    iteratorCalls = 0;
+    nextCalls = 0;
+    substitutions = 0;
+
     statusBox.textContent =
         "STATUS: RUNNING";
 
-    log("PS5 13.60 — V35.3");
-    log("TransformStream Iterator Mapper");
+    log("PS5 13.60 — V35.4");
+    log("Target: iterator #2 / length 3 / index 1");
     log("");
     log(navigator.userAgent);
     log("");
 
-    if (
-        typeof TransformStream !==
-        "function"
-    ) {
+    if (typeof TransformStream !== "function") {
+
         log("TransformStream unsupported");
 
         statusBox.textContent =
@@ -88,52 +108,41 @@ function run() {
         return;
     }
 
+    checkpoint("01_BEFORE_OVERRIDE");
+
     /*
-     * Do NOT log while the override is active.
+     * V35.3 established:
      *
-     * Logging/DOM operations may themselves
-     * create or iterate arrays and contaminate
-     * our observations.
+     * Iterator #1:
+     *   length = 2
+     *
+     * Iterator #2:
+     *   length = 3
+     *
+     * This testcase changes ONLY index 1
+     * from the second iterator.
      */
-
-    const records = [];
-
-    let iteratorNumber = 0;
-    let totalNextCalls = 0;
 
     Array.prototype[Symbol.iterator] =
         function() {
 
-            iteratorNumber++;
+            iteratorCalls++;
 
-            const number =
-                iteratorNumber;
+            const iteratorID =
+                iteratorCalls;
 
-            const array =
-                this;
-
-            const record = {
-                iterator:number,
-                initialLength:array.length,
-                returned:[],
-                doneCalls:0
-            };
-
-            records.push(record);
+            const array = this;
+            const initialLength =
+                array.length;
 
             let index = 0;
 
             return {
                 next() {
 
-                    totalNextCalls++;
+                    nextCalls++;
 
-                    if (
-                        index >=
-                        array.length
-                    ) {
-
-                        record.doneCalls++;
+                    if (index >= array.length) {
 
                         return {
                             done:true,
@@ -141,26 +150,28 @@ function run() {
                         };
                     }
 
-                    const value =
+                    let value =
                         array[index];
 
-                    /*
-                     * Record only primitive metadata.
-                     * Do not inspect object properties.
-                     */
+                    if (
+                        iteratorID === 2 &&
+                        initialLength === 3 &&
+                        index === 1
+                    ) {
 
-                    record.returned.push({
-                        index:index,
-                        type:safeType(value)
-                    });
+                        /*
+                         * Ordinary JS object only.
+                         */
+
+                        value = {
+                            marker:"V354",
+                            index:1
+                        };
+
+                        substitutions++;
+                    }
 
                     index++;
-
-                    /*
-                     * CONTROL:
-                     * Return the original value
-                     * completely unchanged.
-                     */
 
                     return {
                         done:false,
@@ -170,170 +181,153 @@ function run() {
             };
         };
 
+    checkpoint("02_OVERRIDE_INSTALLED");
+
     let stream = null;
-    let error = null;
+    let thrown = null;
 
     try {
+
+        checkpoint(
+            "03_BEFORE_TRANSFORMSTREAM"
+        );
 
         stream =
             new TransformStream();
 
+        /*
+         * If the constructor reaches here,
+         * the substituted value did not cause
+         * a synchronous exception.
+         */
+
+        checkpoint(
+            "04_TRANSFORMSTREAM_RETURNED"
+        );
+
     } catch(e) {
 
-        error = {
-            name:e.name,
-            message:e.message
+        /*
+         * Save primitive information before
+         * restoring the iterator.
+         */
+
+        thrown = {
+            name:
+                String(e.name),
+
+            message:
+                String(e.message),
+
+            isTypeError:
+                e instanceof TypeError
         };
     }
 
     /*
-     * Restore BEFORE rendering anything.
+     * Restore immediately.
      */
 
     restore();
 
-    log("Constructor finished.");
+    checkpoint(
+        "05_ITERATOR_RESTORED"
+    );
+
+    log("");
+    log("==========================");
+    log("OBSERVATION");
+    log("==========================");
+
+    log(
+        "iteratorCalls = " +
+        iteratorCalls
+    );
+
+    log(
+        "nextCalls = " +
+        nextCalls
+    );
+
+    log(
+        "substitutions = " +
+        substitutions
+    );
+
     log("");
 
-    if (error) {
+    if (thrown) {
 
         log(
-            "EXCEPTION: " +
-            error.name +
-            ": " +
-            error.message
+            "Constructor threw:"
         );
+
+        log(
+            thrown.name +
+            ": " +
+            thrown.message
+        );
+
+        log(
+            "TypeError = " +
+            thrown.isTypeError
+        );
+
+        if (thrown.isTypeError) {
+
+            log("");
+            log(
+                "RESULT: NORMAL TYPEERROR"
+            );
+
+        } else {
+
+            log("");
+            log(
+                "RESULT: NON-TYPEERROR EXCEPTION"
+            );
+        }
 
     } else {
 
         log(
-            "TransformStream: SUCCESS"
+            "TransformStream returned normally"
         );
 
-        log(
-            "readable: " +
-            typeof stream.readable
-        );
-
-        log(
-            "writable: " +
-            typeof stream.writable
-        );
-    }
-
-    log("");
-    log("==========================");
-    log("ITERATOR MAP");
-    log("==========================");
-
-    log(
-        "Iterator calls: " +
-        records.length
-    );
-
-    log(
-        "Total next() calls: " +
-        totalNextCalls
-    );
-
-    log("");
-
-    for (
-        let i = 0;
-        i < records.length;
-        i++
-    ) {
-
-        const r =
-            records[i];
-
-        log(
-            "Iterator #" +
-            r.iterator
-        );
-
-        log(
-            "  initial length = " +
-            r.initialLength
-        );
-
-        log(
-            "  values returned = " +
-            r.returned.length
-        );
-
-        log(
-            "  done calls = " +
-            r.doneCalls
-        );
-
-        for (
-            let j = 0;
-            j < r.returned.length;
-            j++
-        ) {
-
-            const v =
-                r.returned[j];
+        if (stream) {
 
             log(
-                "  [" +
-                v.index +
-                "] type = " +
-                v.type
+                "readable = " +
+                typeof stream.readable
+            );
+
+            log(
+                "writable = " +
+                typeof stream.writable
             );
         }
 
         log("");
+
+        if (substitutions === 1) {
+
+            log(
+                "RESULT: TARGET SUBSTITUTION REACHED"
+            );
+
+        } else {
+
+            log(
+                "RESULT: TARGET WAS NOT REACHED"
+            );
+        }
     }
 
-    /*
-     * Sanity check.
-     */
+    checkpoint("06_COMPLETE");
 
-    let accounted = 0;
-
-    for (
-        let i = 0;
-        i < records.length;
-        i++
-    ) {
-
-        accounted +=
-            records[i].returned.length;
-
-        accounted +=
-            records[i].doneCalls;
-    }
-
+    log("");
     log("==========================");
-
-    log(
-        "Accounted next() calls: " +
-        accounted
-    );
-
-    log(
-        "Observed next() calls: " +
-        totalNextCalls
-    );
-
-    if (
-        accounted ===
-        totalNextCalls
-    ) {
-
-        log(
-            "MAPPING: CONSISTENT"
-        );
-
-    } else {
-
-        log(
-            "MAPPING: CHECK RESULT"
-        );
-    }
-
+    log("V35.4 COMPLETE");
     log("==========================");
 
     statusBox.textContent =
@@ -341,6 +335,8 @@ function run() {
 
     button.disabled = false;
 }
+
+showPrevious();
 
 button.onclick = run;
 
