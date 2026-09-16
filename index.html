@@ -1,37 +1,37 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V33 SSV Entry Verifier</title>
+<title>PS5 13.60 - V33.1 SSV UAF Crash Detector</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
     font:15px monospace;
-    padding:18px;
+    padding:18px
 }
 button {
     font:18px monospace;
-    padding:10px 18px;
+    padding:10px 18px
 }
 #status {
-    margin:15px 0;
     padding:10px;
     border:1px solid #555;
+    margin:15px 0
 }
 pre {
     white-space:pre-wrap;
-    word-break:break-word;
+    word-break:break-word
 }
-input {
+input,.focusTarget {
     position:absolute;
-    left:-5000px;
+    left:-5000px
 }
 </style>
 
-<h2>PS5 13.60 — V33</h2>
-<div>SSV entry-path verifier — pre-primitive only</div>
+<h2>PS5 13.60 — V33.1</h2>
+<div>SSV lifetime / natural-crash detector</div>
 
-<p><button id="run">RUN V33</button></p>
+<p><button id="run">RUN V33.1</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -40,205 +40,209 @@ input {
 "use strict";
 
 /*
- * V33
+ * V33.1
  *
- * PS5 13.60 SerializedScriptValue entry-path verifier.
+ * SerializedScriptValue lifetime diagnostic.
  *
- * Tests browser-visible prerequisites associated with the
- * historical SSV same-document navigation lifetime path.
+ * Goal:
+ * Detect a naturally observable crash or state/lifetime
+ * inconsistency around:
  *
- * Deliberately stops before:
- *   - freed-object reclamation
- *   - heap spraying
- *   - address disclosure
- *   - arbitrary read/write
- *   - native calls
- *   - ROP/syscalls
+ * same-document traversal
+ *      ->
+ * focus transition / blur
+ *      ->
+ * replaceState()
+ *
+ * Deliberately DOES NOT:
+ *   reclaim freed native objects
+ *   spray the heap
+ *   disclose addresses
+ *   construct arbitrary read/write
+ *   execute native code
  */
 
-const out = document.querySelector("#log");
+const logBox = document.querySelector("#log");
 const statusBox = document.querySelector("#status");
-const button = document.querySelector("#run");
+const runButton = document.querySelector("#run");
 
-let blurCount = 0;
-let replaceCount = 0;
-let popCount = 0;
 let anomalies = 0;
 let exceptions = 0;
+let completed = 0;
 
-function log(s) {
-    out.textContent += s + "\n";
-    console.log(s);
+function log(x) {
+    logBox.textContent += x + "\n";
+    console.log(x);
 }
 
-function cp(s) {
+function checkpoint(x) {
     try {
-        localStorage.setItem("PS5_V33_CP", s);
+        localStorage.setItem(
+            "PS5_V331_CHECKPOINT",
+            x
+        );
     } catch (_) {}
 
-    log("[CP] " + s);
+    log("[CP] " + x);
 }
 
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
+function delay(ms) {
+    return new Promise(
+        resolve => setTimeout(resolve, ms)
+    );
 }
 
-function describeState(s) {
+function stateInfo(x) {
+
     try {
-        if (!s)
-            return String(s);
+
+        if (!x)
+            return String(x);
 
         return JSON.stringify({
-            marker:s.marker,
-            sequence:s.sequence,
-            textLength:
-                typeof s.text === "string"
-                ? s.text.length
+            marker:x.marker,
+            run:x.run,
+            size:
+                typeof x.data === "string"
+                ? x.data.length
                 : -1,
-            nested:
-                s.nested &&
-                s.nested.value
+            value:
+                x.nested &&
+                x.nested.value
         });
+
     } catch(e) {
+
         return "STATE_ERROR:" + e.name;
     }
 }
 
-async function run() {
+function makeState(
+    marker,
+    run,
+    size,
+    value
+) {
 
-    button.disabled = true;
-    out.textContent = "";
+    return {
+        marker,
+        run,
+        data:"X".repeat(size),
 
-    blurCount = 0;
-    replaceCount = 0;
-    popCount = 0;
-    anomalies = 0;
-    exceptions = 0;
+        nested:{
+            value,
+            text:"V331"
+        },
 
-    statusBox.textContent =
-        "STATUS: RUNNING";
+        array:[
+            run,
+            run + 1,
+            run + 2,
+            run + 3
+        ]
+    };
+}
 
-    const previous =
-        localStorage.getItem(
-            "PS5_V33_CP"
-        );
 
-    if (previous)
-        log(
-            "Previous checkpoint: " +
-            previous
-        );
+/*
+ * Each case performs only one traversal.
+ *
+ * We vary serialized-state size rather than
+ * performing allocator manipulation.
+ */
 
-    log("PS5 13.60 — V33");
-    log("SSV ENTRY VERIFIER");
-    log("");
-    log(navigator.userAgent);
-    log("");
+async function runCase(
+    number,
+    size
+) {
 
-    const anchor1 =
-        document.createElement("div");
+    const prefix =
+        "CASE_" + number;
 
-    anchor1.id = "v33-one";
-    anchor1.tabIndex = -1;
-
-    const anchor2 =
-        document.createElement("div");
-
-    anchor2.id = "v33-two";
-    anchor2.tabIndex = -1;
+    checkpoint(
+        prefix + ":CREATE"
+    );
 
     const input =
         document.createElement("input");
 
-    input.id = "v33-focus";
+    const target =
+        document.createElement("div");
 
-    document.body.appendChild(anchor1);
-    document.body.appendChild(anchor2);
+    target.tabIndex = -1;
+    target.className = "focusTarget";
+
     document.body.appendChild(input);
+    document.body.appendChild(target);
 
-    /*
-     * Deliberately ordinary structured state.
-     * Large enough to exercise serialization,
-     * but not intended for heap shaping.
-     */
+    const original =
+        makeState(
+            "ORIGINAL",
+            number,
+            size,
+            0x1000 + number
+        );
 
-    const originalState = {
-        marker:"V33-ORIGINAL",
-        sequence:1,
-        text:"A".repeat(65536),
-        nested:{
-            value:0x1337
-        },
-        array:[
-            1,2,3,4,5,6,7,8
-        ]
-    };
+    const second =
+        makeState(
+            "SECOND",
+            number,
+            size,
+            0x2000 + number
+        );
 
-    const secondState = {
-        marker:"V33-SECOND",
-        sequence:2,
-        text:"B".repeat(65536),
-        nested:{
-            value:0x2664
-        }
-    };
+    const replacement =
+        makeState(
+            "REPLACEMENT",
+            number,
+            size,
+            0x3000 + number
+        );
 
-    const replacementState = {
-        marker:"V33-REPLACED",
-        sequence:3,
-        text:"C".repeat(65536),
-        nested:{
-            value:0x3999
-        }
-    };
+    let blurCount = 0;
+    let popCount = 0;
+    let replacementReturned = false;
+    let eventState = null;
 
-    let popStateObject = null;
-
-    function onBlur() {
+    function blurHandler() {
 
         blurCount++;
 
-        cp("V33:BLUR_ENTER");
-
-        log(
-            "[BLUR] count=" +
-            blurCount
+        checkpoint(
+            prefix +
+            ":BLUR_ENTER"
         );
 
         log(
-            "[BLUR] history.state BEFORE=" +
-            describeState(
-                history.state
-            )
+            "[" + prefix +
+            "] before replace = " +
+            stateInfo(history.state)
         );
 
         try {
 
-            cp(
-                "V33:BEFORE_REPLACE_FROM_BLUR"
+            checkpoint(
+                prefix +
+                ":BEFORE_REPLACE"
             );
 
             history.replaceState(
-                replacementState,
+                replacement,
                 "",
                 location.href
             );
 
-            replaceCount++;
+            replacementReturned = true;
 
-            cp(
-                "V33:AFTER_REPLACE_FROM_BLUR"
+            checkpoint(
+                prefix +
+                ":AFTER_REPLACE"
             );
 
             log(
-                "[BLUR] replaceState returned"
-            );
-
-            log(
-                "[BLUR] history.state AFTER=" +
-                describeState(
-                    history.state
-                )
+                "[" + prefix +
+                "] after replace = " +
+                stateInfo(history.state)
             );
 
         } catch(e) {
@@ -246,232 +250,232 @@ async function run() {
             exceptions++;
 
             log(
-                "[BLUR EXCEPTION] " +
+                "[" + prefix +
+                "] replace exception: " +
                 e
             );
         }
 
-        cp("V33:BLUR_EXIT");
+        checkpoint(
+            prefix +
+            ":BLUR_EXIT"
+        );
     }
 
     input.addEventListener(
         "blur",
-        onBlur,
+        blurHandler,
         {once:true}
     );
 
-    window.addEventListener(
-        "popstate",
-        function handler(event) {
+    const popPromise =
+        new Promise(resolve => {
 
-            popCount++;
+            function handler(e) {
 
-            popStateObject =
-                event.state;
+                window.removeEventListener(
+                    "popstate",
+                    handler
+                );
 
-            cp(
-                "V33:POPSTATE_" +
-                popCount
-            );
+                popCount++;
 
-            log(
-                "[POP] count=" +
-                popCount
-            );
+                eventState =
+                    e.state;
 
-            log(
-                "[POP] event.state=" +
-                describeState(
-                    event.state
-                )
-            );
+                checkpoint(
+                    prefix +
+                    ":POPSTATE"
+                );
 
-            log(
-                "[POP] history.state=" +
-                describeState(
-                    history.state
-                )
-            );
+                log(
+                    "[" + prefix +
+                    "] event.state = " +
+                    stateInfo(e.state)
+                );
 
-            window.removeEventListener(
+                log(
+                    "[" + prefix +
+                    "] history.state = " +
+                    stateInfo(history.state)
+                );
+
+                resolve();
+            }
+
+            window.addEventListener(
                 "popstate",
                 handler
             );
-        }
-    );
+        });
 
     try {
 
-        cp("V33:SET_BASE");
+        checkpoint(
+            prefix +
+            ":BASE_STATE"
+        );
 
         history.replaceState(
-            originalState,
+            original,
             "",
-            "#v33-one"
+            "#v331-" +
+            number +
+            "-base"
         );
 
-        log(
-            "[BASE] " +
-            describeState(
-                history.state
-            )
+        checkpoint(
+            prefix +
+            ":PUSH_STATE"
         );
-
-        cp("V33:PUSH_SECOND");
 
         history.pushState(
-            secondState,
+            second,
             "",
-            "#v33-two"
+            "#v331-" +
+            number +
+            "-second"
         );
-
-        log(
-            "[SECOND] " +
-            describeState(
-                history.state
-            )
-        );
-
-        /*
-         * Establish focus before initiating
-         * same-document traversal.
-         */
 
         input.focus();
 
-        log(
-            "[FOCUS] active=" +
-            (
-                document.activeElement
-                === input
-            )
+        await delay(40);
+
+        checkpoint(
+            prefix +
+            ":BEFORE_BACK"
         );
-
-        await sleep(50);
-
-        cp("V33:BEFORE_HISTORY_BACK");
 
         history.back();
 
-        cp(
-            "V33:AFTER_HISTORY_BACK_RETURN"
+        checkpoint(
+            prefix +
+            ":BACK_RETURNED"
         );
 
         /*
-         * Focus transition while the history
-         * traversal is being delivered.
-         *
-         * This causes the blur callback which
-         * performs replaceState().
+         * Trigger the focus transition which
+         * produces the blur callback.
          */
 
-        anchor1.focus();
+        target.focus();
 
-        cp(
-            "V33:AFTER_FOCUS_CHANGE"
+        checkpoint(
+            prefix +
+            ":FOCUS_CHANGED"
         );
 
-        await sleep(400);
+        await Promise.race([
+            popPromise,
+            delay(1500)
+        ]);
 
-        cp("V33:FINAL_CHECK");
-
-        log("");
-        log(
-            "FINAL history.state=" +
-            describeState(
-                history.state
-            )
-        );
-
-        log(
-            "FINAL event.state=" +
-            describeState(
-                popStateObject
-            )
+        checkpoint(
+            prefix +
+            ":VERIFY"
         );
 
         log(
-            "FINAL hash=" +
-            location.hash
-        );
-
-        log(
-            "BLUR CALLBACKS=" +
-            blurCount
-        );
-
-        log(
-            "REPLACE IN BLUR=" +
-            replaceCount
-        );
-
-        log(
-            "POP EVENTS=" +
-            popCount
+            "[" + prefix +
+            "] blur=" +
+            blurCount +
+            " pop=" +
+            popCount +
+            " replaceReturned=" +
+            replacementReturned
         );
 
         /*
-         * Browser-visible consistency checks.
+         * Check the ordinary JS objects themselves.
          */
+
+        if (
+            original.marker !== "ORIGINAL" ||
+            original.data.length !== size ||
+            original.nested.value !==
+                0x1000 + number
+        ) {
+
+            anomalies++;
+
+            log(
+                "[ANOMALY] " +
+                prefix +
+                " original JS object changed"
+            );
+        }
+
+        if (
+            replacement.marker !==
+                "REPLACEMENT" ||
+            replacement.data.length !== size
+        ) {
+
+            anomalies++;
+
+            log(
+                "[ANOMALY] " +
+                prefix +
+                " replacement JS object changed"
+            );
+        }
 
         if (blurCount !== 1) {
+
             anomalies++;
+
             log(
-                "[ANOMALY] blur count=" +
+                "[ANOMALY] " +
+                prefix +
+                " blurCount=" +
                 blurCount
             );
         }
 
-        if (replaceCount !== 1) {
+        if (!replacementReturned) {
+
             anomalies++;
+
             log(
-                "[ANOMALY] replace count=" +
-                replaceCount
+                "[ANOMALY] " +
+                prefix +
+                " replaceState did not return"
             );
         }
 
         if (popCount !== 1) {
+
             anomalies++;
+
             log(
-                "[ANOMALY] pop count=" +
+                "[ANOMALY] " +
+                prefix +
+                " popCount=" +
                 popCount
             );
         }
 
-        /*
-         * Verify original JS objects themselves
-         * remain coherent.
-         */
-
         if (
-            originalState.marker
-            !== "V33-ORIGINAL" ||
-            originalState.nested.value
-            !== 0x1337 ||
-            originalState.text.length
-            !== 65536
+            eventState &&
+            typeof eventState.marker
+            !== "string"
         ) {
+
             anomalies++;
 
             log(
-                "[ANOMALY] original object changed"
+                "[ANOMALY] " +
+                prefix +
+                " malformed event.state"
             );
         }
 
-        if (
-            replacementState.marker
-            !== "V33-REPLACED" ||
-            replacementState.text.length
-            !== 65536
-        ) {
-            anomalies++;
+        completed++;
 
-            log(
-                "[ANOMALY] replacement object changed"
-            );
-        }
-
-        cp("V33:COMPLETE");
+        checkpoint(
+            prefix +
+            ":COMPLETE"
+        );
 
     } catch(e) {
 
@@ -479,38 +483,111 @@ async function run() {
 
         log(
             "[EXCEPTION] " +
+            prefix +
+            " :: " +
             e
         );
 
-        cp(
-            "V33:TOP_LEVEL_EXCEPTION"
+        checkpoint(
+            prefix +
+            ":EXCEPTION"
         );
+
+    } finally {
+
+        try {
+            input.remove();
+            target.remove();
+        } catch (_) {}
+    }
+}
+
+
+async function run() {
+
+    runButton.disabled = true;
+
+    logBox.textContent = "";
+
+    anomalies = 0;
+    exceptions = 0;
+    completed = 0;
+
+    statusBox.textContent =
+        "STATUS: RUNNING";
+
+    const previous =
+        localStorage.getItem(
+            "PS5_V331_CHECKPOINT"
+        );
+
+    if (previous) {
+
+        log(
+            "PREVIOUS CHECKPOINT: " +
+            previous
+        );
+
+        log("");
     }
 
-    try {
-        input.remove();
-        anchor1.remove();
-        anchor2.remove();
-    } catch (_) {}
+    log("PS5 13.60 — V33.1");
+    log("SSV LIFETIME / NATURAL CRASH DETECTOR");
+    log(navigator.userAgent);
+    log("");
+
+    /*
+     * A small matrix of ordinary serialized-state
+     * sizes. This is intentionally NOT a heap spray.
+     */
+
+    const sizes = [
+        1024,
+        4096,
+        16384,
+        65536
+    ];
+
+    for (
+        let i = 0;
+        i < sizes.length;
+        i++
+    ) {
+
+        log("");
+        log(
+            "=== CASE " +
+            (i + 1) +
+            " / size " +
+            sizes[i] +
+            " ==="
+        );
+
+        await runCase(
+            i + 1,
+            sizes[i]
+        );
+
+        /*
+         * Avoid History API rate limiting.
+         */
+
+        await delay(800);
+    }
+
+    checkpoint(
+        "V33.1:COMPLETE"
+    );
 
     log("");
     log("============================");
-    log("V33 RESULT");
+    log("V33.1 RESULT");
     log("============================");
 
     log(
-        "BLUR CALLBACKS: " +
-        blurCount
-    );
-
-    log(
-        "REPLACE CALLBACKS: " +
-        replaceCount
-    );
-
-    log(
-        "POP EVENTS: " +
-        popCount
+        "CASES COMPLETED: " +
+        completed +
+        "/4"
     );
 
     log(
@@ -530,8 +607,8 @@ async function run() {
         ? "STATUS: CHECK RESULT"
         : "STATUS: NORMAL";
 
-    button.disabled = false;
+    runButton.disabled = false;
 }
 
-button.onclick = run;
+runButton.onclick = run;
 </script>
