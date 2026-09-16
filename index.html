@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V26 SVG/SMIL Lifecycle Probe</title>
+<title>PS5 13.60 - V27 SVG Animation Reparent Diagnostic</title>
 
 <style>
 body {
@@ -29,12 +29,10 @@ svg {
 }
 </style>
 
-<h2>PS5 WebKit V26</h2>
-<div>SVG / SMIL lifecycle & re-entrancy probe</div>
+<h2>PS5 13.60 — V27</h2>
+<div>SVG/SMIL animation reparent diagnostic</div>
 
-<p>
-<button id="run">RUN V26</button>
-</p>
+<p><button id="run">RUN V27</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -42,581 +40,381 @@ svg {
 <script>
 "use strict";
 
-const logBox = document.querySelector("#log");
-const statusBox = document.querySelector("#status");
 const NS = "http://www.w3.org/2000/svg";
 
-let pass = 0;
+const logBox = document.querySelector("#log");
+const statusBox = document.querySelector("#status");
+const runButton = document.querySelector("#run");
+
+let beginCount = 0;
+let endCount = 0;
+let repeatBegin = 0;
 let exceptions = 0;
 let anomalies = 0;
-let current = "NONE";
 
-function log(s) {
-    logBox.textContent += s + "\n";
-    console.log(s);
+function log(text) {
+    logBox.textContent += text + "\n";
+    console.log(text);
 }
 
-function checkpoint(name, stage) {
-    current = name + ":" + stage;
-
+function cp(stage) {
     try {
-        localStorage.setItem("PS5_V26_CHECKPOINT", current);
+        localStorage.setItem("PS5_V27_CHECKPOINT", stage);
     } catch (_) {}
 
-    log("[CP] " + current);
+    log("[CP] " + stage);
 }
 
-function ok(name) {
-    pass++;
-    log("[PASS] " + name);
-}
-
-function anomaly(name, text) {
-    anomalies++;
-    log("[ANOMALY] " + name + " :: " + text);
-}
-
-function exception(name, e) {
-    exceptions++;
-    log("[EXCEPTION] " + name + " :: " + e);
-}
-
-function svgElement(name) {
+function svg(name) {
     return document.createElementNS(NS, name);
 }
 
-function forceLayout(node) {
+function describe(node) {
+    if (!node)
+        return "null";
+
+    return (
+        node.nodeName +
+        " connected=" + node.isConnected +
+        " parent=" +
+        (node.parentNode ? node.parentNode.nodeName : "null")
+    );
+}
+
+function layout(node) {
     try {
-        void node.getBoundingClientRect();
+        const r = node.getBoundingClientRect();
+
+        log(
+            "[LAYOUT] x=" + r.x +
+            " y=" + r.y +
+            " w=" + r.width +
+            " h=" + r.height
+        );
+
         void document.body.offsetHeight;
-    } catch (_) {}
-}
 
-function cleanup(node) {
-    try {
-        if (node && node.parentNode)
-            node.parentNode.removeChild(node);
-    } catch (_) {}
-}
-
-async function delay(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
-
-
-/* ---------------------------------------------------------
-   A - remove animation target from beginEvent
-   --------------------------------------------------------- */
-
-async function testA() {
-
-    const name = "A_REMOVE_TARGET_BEGIN";
-
-    checkpoint(name, "CREATE");
-
-    let svg, rect, anim;
-
-    try {
-
-        svg = svgElement("svg");
-        svg.setAttribute("width", "100");
-        svg.setAttribute("height", "100");
-
-        rect = svgElement("rect");
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
-
-        anim = svgElement("animate");
-
-        anim.setAttribute("attributeName", "x");
-        anim.setAttribute("from", "0");
-        anim.setAttribute("to", "50");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
-
-        rect.appendChild(anim);
-        svg.appendChild(rect);
-        document.body.appendChild(svg);
-
-        let fired = false;
-
-        anim.addEventListener("beginEvent", function () {
-
-            fired = true;
-
-            checkpoint(name, "BEGIN_ENTER");
-
-            rect.remove();
-
-            checkpoint(name, "TARGET_REMOVED");
-
-            /* retained references */
-            void rect.ownerDocument;
-            void anim.ownerDocument;
-
-            forceLayout(svg);
-
-            checkpoint(name, "BEGIN_EXIT");
-        });
-
-        checkpoint(name, "BEGIN_CALL");
-
-        anim.beginElement();
-
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        if (!fired)
-            log("[INFO] beginEvent not dispatched");
-
-        ok(name);
-
-    } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
+    } catch (e) {
+        log("[LAYOUT_EXCEPTION] " + e);
     }
 }
 
-
-/* ---------------------------------------------------------
-   B - remove entire SVG tree from animation callback
-   --------------------------------------------------------- */
-
-async function testB() {
-
-    const name = "B_REMOVE_SVG_BEGIN";
-
-    checkpoint(name, "CREATE");
-
-    let svg, path, anim;
-
-    try {
-
-        svg = svgElement("svg");
-
-        path = svgElement("path");
-        path.setAttribute("d", "M0 0 L50 50");
-
-        anim = svgElement("animate");
-
-        anim.setAttribute("attributeName", "opacity");
-        anim.setAttribute("from", "1");
-        anim.setAttribute("to", "0");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
-
-        path.appendChild(anim);
-        svg.appendChild(path);
-        document.body.appendChild(svg);
-
-        anim.addEventListener("beginEvent", function () {
-
-            checkpoint(name, "CALLBACK_ENTER");
-
-            svg.remove();
-
-            checkpoint(name, "SVG_REMOVED");
-
-            /* Read retained wrappers after removal. */
-            void path.getAttribute("d");
-            void anim.getAttribute("dur");
-
-            forceLayout(document.body);
-
-            checkpoint(name, "CALLBACK_EXIT");
-        });
-
-        anim.beginElement();
-
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
-
-    } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
-    }
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function run() {
 
-/* ---------------------------------------------------------
-   C - replace target subtree during callback
-   --------------------------------------------------------- */
+    runButton.disabled = true;
+    logBox.textContent = "";
 
-async function testC() {
+    beginCount = 0;
+    endCount = 0;
+    repeatBegin = 0;
+    exceptions = 0;
+    anomalies = 0;
 
-    const name = "C_REPLACE_SUBTREE";
+    statusBox.textContent = "RUNNING";
 
-    checkpoint(name, "CREATE");
+    const previous =
+        localStorage.getItem("PS5_V27_CHECKPOINT");
 
-    let svg, group, rect, anim;
+    if (previous)
+        log("Previous checkpoint: " + previous);
+
+    log("UA:");
+    log(navigator.userAgent);
+    log("");
+
+    let root = null;
 
     try {
 
-        svg = svgElement("svg");
-        group = svgElement("g");
-        rect = svgElement("rect");
+        cp("CREATE");
 
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
+        root = svg("svg");
+        root.setAttribute("width", "200");
+        root.setAttribute("height", "100");
 
-        anim = svgElement("animate");
+        const left = svg("rect");
+        const right = svg("rect");
+
+        left.id = "left";
+        right.id = "right";
+
+        left.setAttribute("x", "0");
+        left.setAttribute("y", "0");
+        left.setAttribute("width", "20");
+        left.setAttribute("height", "20");
+
+        right.setAttribute("x", "50");
+        right.setAttribute("y", "0");
+        right.setAttribute("width", "30");
+        right.setAttribute("height", "20");
+
+        const anim = svg("animate");
+
+        anim.id = "animation";
 
         anim.setAttribute("attributeName", "width");
         anim.setAttribute("from", "20");
         anim.setAttribute("to", "80");
-        anim.setAttribute("dur", "0.05s");
+        anim.setAttribute("dur", "0.10s");
         anim.setAttribute("begin", "indefinite");
+        anim.setAttribute("fill", "freeze");
 
-        rect.appendChild(anim);
-        group.appendChild(rect);
-        svg.appendChild(group);
-        document.body.appendChild(svg);
+        left.appendChild(anim);
+
+        root.appendChild(left);
+        root.appendChild(right);
+
+        document.body.appendChild(root);
+
+        log("[INITIAL]");
+        log("left:  " + describe(left));
+        log("right: " + describe(right));
+        log("anim:  " + describe(anim));
+        log("");
+
+        /*
+         * Important:
+         * V26 appeared to deliver beginEvent more than once after
+         * reparenting. V27 records that behaviour instead of assuming
+         * that a second event is an error.
+         */
 
         anim.addEventListener("beginEvent", function () {
 
-            checkpoint(name, "CALLBACK_ENTER");
+            beginCount++;
 
-            const oldRect = rect;
+            cp("BEGIN_" + beginCount + "_ENTER");
 
-            group.textContent = "";
+            log(
+                "[BEGIN #" + beginCount + "] " +
+                describe(anim)
+            );
 
-            checkpoint(name, "SUBTREE_CLEARED");
+            /*
+             * Only perform the reparent on the first callback.
+             * Subsequent callbacks are observation-only.
+             */
 
-            const replacement = svgElement("circle");
-            replacement.setAttribute("r", "10");
+            if (beginCount === 1) {
 
-            group.appendChild(replacement);
+                cp("BEFORE_REPARENT");
 
-            /* retained old wrapper */
-            void oldRect.ownerSVGElement;
-            void anim.ownerSVGElement;
+                log(
+                    "[BEFORE REPARENT] " +
+                    describe(anim)
+                );
 
-            forceLayout(svg);
+                right.appendChild(anim);
 
-            checkpoint(name, "CALLBACK_EXIT");
+                cp("AFTER_REPARENT");
+
+                log(
+                    "[AFTER REPARENT] " +
+                    describe(anim)
+                );
+
+                log(
+                    "[OLD TARGET] " +
+                    describe(left)
+                );
+
+                log(
+                    "[NEW TARGET] " +
+                    describe(right)
+                );
+
+                layout(root);
+
+            } else {
+
+                repeatBegin++;
+
+                cp(
+                    "REPEATED_BEGIN_" +
+                    beginCount
+                );
+
+                log(
+                    "[REPEATED BEGIN] count=" +
+                    beginCount
+                );
+
+                log(
+                    "[CURRENT OWNER] " +
+                    describe(anim)
+                );
+
+                /*
+                 * Retained old/new wrappers are intentionally read,
+                 * but we don't perform heap reclamation or memory
+                 * manipulation.
+                 */
+
+                log(
+                    "[LEFT RETAINED] " +
+                    describe(left)
+                );
+
+                log(
+                    "[RIGHT RETAINED] " +
+                    describe(right)
+                );
+
+                layout(root);
+            }
+
+            cp(
+                "BEGIN_" +
+                beginCount +
+                "_EXIT"
+            );
         });
 
-        anim.beginElement();
-
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
-
-    } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
-    }
-}
-
-
-/* ---------------------------------------------------------
-   D - reparent animation element during callback
-   --------------------------------------------------------- */
-
-async function testD() {
-
-    const name = "D_REPARENT_ANIMATION";
-
-    checkpoint(name, "CREATE");
-
-    let svg, a, b, anim;
-
-    try {
-
-        svg = svgElement("svg");
-
-        a = svgElement("rect");
-        b = svgElement("rect");
-
-        a.setAttribute("width", "20");
-        b.setAttribute("width", "30");
-
-        anim = svgElement("animate");
-
-        anim.setAttribute("attributeName", "width");
-        anim.setAttribute("from", "20");
-        anim.setAttribute("to", "60");
-        anim.setAttribute("dur", "0.05s");
-        anim.setAttribute("begin", "indefinite");
-
-        a.appendChild(anim);
-
-        svg.appendChild(a);
-        svg.appendChild(b);
-
-        document.body.appendChild(svg);
-
-        anim.addEventListener("beginEvent", function () {
-
-            checkpoint(name, "CALLBACK_ENTER");
-
-            b.appendChild(anim);
-
-            checkpoint(name, "ANIMATION_REPARENTED");
-
-            void a.getBoundingClientRect();
-            void b.getBoundingClientRect();
-
-            forceLayout(svg);
-
-            checkpoint(name, "CALLBACK_EXIT");
-        });
-
-        anim.beginElement();
-
-        await delay(120);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
-
-    } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
-    }
-}
-
-
-/* ---------------------------------------------------------
-   E - animation end callback removes parent
-   --------------------------------------------------------- */
-
-async function testE() {
-
-    const name = "E_REMOVE_PARENT_END";
-
-    checkpoint(name, "CREATE");
-
-    let svg, group, rect, anim;
-
-    try {
-
-        svg = svgElement("svg");
-        group = svgElement("g");
-        rect = svgElement("rect");
-
-        rect.setAttribute("width", "20");
-        rect.setAttribute("height", "20");
-
-        anim = svgElement("animate");
-
-        anim.setAttribute("attributeName", "opacity");
-        anim.setAttribute("from", "1");
-        anim.setAttribute("to", "0");
-        anim.setAttribute("dur", "0.03s");
-        anim.setAttribute("begin", "indefinite");
-
-        rect.appendChild(anim);
-        group.appendChild(rect);
-        svg.appendChild(group);
-
-        document.body.appendChild(svg);
 
         anim.addEventListener("endEvent", function () {
 
-            checkpoint(name, "END_ENTER");
+            endCount++;
 
-            group.remove();
+            cp("END_" + endCount + "_ENTER");
 
-            checkpoint(name, "GROUP_REMOVED");
+            log(
+                "[END #" + endCount + "] " +
+                describe(anim)
+            );
 
-            void rect.ownerDocument;
-            void anim.ownerDocument;
+            log(
+                "[LEFT] " +
+                describe(left)
+            );
 
-            forceLayout(svg);
+            log(
+                "[RIGHT] " +
+                describe(right)
+            );
 
-            checkpoint(name, "END_EXIT");
+            layout(root);
+
+            cp(
+                "END_" +
+                endCount +
+                "_EXIT"
+            );
         });
+
+
+        cp("BEFORE_BEGIN_ELEMENT");
+
+        log("");
+        log("[CALL] anim.beginElement()");
 
         anim.beginElement();
 
-        await delay(150);
+        cp("AFTER_BEGIN_ELEMENT_RETURN");
 
-        checkpoint(name, "VERIFY");
+        /*
+         * Give SMIL enough time to dispatch begin/end events.
+         */
 
-        ok(name);
+        await wait(500);
 
-    } catch(e) {
+        cp("FINAL_VERIFY");
 
-        exception(name, e);
+        log("");
+        log("===== FINAL DOM STATE =====");
 
-    } finally {
+        log(
+            "animation: " +
+            describe(anim)
+        );
 
-        cleanup(svg);
-    }
-}
+        log(
+            "left:      " +
+            describe(left)
+        );
 
+        log(
+            "right:     " +
+            describe(right)
+        );
 
-/* ---------------------------------------------------------
-   F - nested/re-entrant animation start
-   --------------------------------------------------------- */
+        log("");
+        log("===== EVENT COUNTS =====");
 
-async function testF() {
+        log("beginEvent: " + beginCount);
+        log("endEvent: " + endCount);
+        log("repeated beginEvent: " + repeatBegin);
 
-    const name = "F_NESTED_BEGIN";
+        /*
+         * These aren't automatically treated as vulnerabilities.
+         * We're recording unexpected observable state separately.
+         */
 
-    checkpoint(name, "CREATE");
-
-    let svg, r1, r2, a1, a2;
-
-    try {
-
-        svg = svgElement("svg");
-
-        r1 = svgElement("rect");
-        r2 = svgElement("rect");
-
-        r1.setAttribute("width", "10");
-        r2.setAttribute("width", "10");
-
-        a1 = svgElement("animate");
-        a2 = svgElement("animate");
-
-        for (const a of [a1, a2]) {
-
-            a.setAttribute("attributeName", "width");
-            a.setAttribute("from", "10");
-            a.setAttribute("to", "50");
-            a.setAttribute("dur", "0.05s");
-            a.setAttribute("begin", "indefinite");
+        if (!anim.isConnected) {
+            anomalies++;
+            log(
+                "[ANOMALY] animation unexpectedly disconnected"
+            );
         }
 
-        r1.appendChild(a1);
-        r2.appendChild(a2);
+        if (anim.parentNode !== right) {
+            anomalies++;
+            log(
+                "[ANOMALY] final animation parent is not RIGHT"
+            );
+        }
 
-        svg.appendChild(r1);
-        svg.appendChild(r2);
+        if (beginCount === 0) {
+            anomalies++;
+            log(
+                "[ANOMALY] beginEvent never fired"
+            );
+        }
 
-        document.body.appendChild(svg);
+        cp("V27_COMPLETE");
 
-        let nested = false;
+    } catch (e) {
 
-        a1.addEventListener("beginEvent", function () {
+        exceptions++;
 
-            checkpoint(name, "A1_ENTER");
+        cp("TOP_LEVEL_EXCEPTION");
 
-            if (!nested) {
+        log("");
+        log("[EXCEPTION] " + e);
 
-                nested = true;
+        try {
+            log(e.stack || "");
+        } catch (_) {}
 
-                checkpoint(name, "START_A2");
-
-                a2.beginElement();
-            }
-
-            r1.remove();
-
-            checkpoint(name, "R1_REMOVED");
-
-            forceLayout(svg);
-
-            checkpoint(name, "A1_EXIT");
-        });
-
-        a2.addEventListener("beginEvent", function () {
-
-            checkpoint(name, "A2_ENTER");
-
-            void r1.ownerDocument;
-            void r2.ownerDocument;
-
-            forceLayout(svg);
-
-            checkpoint(name, "A2_EXIT");
-        });
-
-        a1.beginElement();
-
-        await delay(150);
-
-        checkpoint(name, "VERIFY");
-
-        ok(name);
-
-    } catch(e) {
-
-        exception(name, e);
-
-    } finally {
-
-        cleanup(svg);
     }
-}
-
-
-async function run() {
-
-    document.querySelector("#run").disabled = true;
-
-    pass = 0;
-    exceptions = 0;
-    anomalies = 0;
-
-    logBox.textContent = "";
-
-    const old = localStorage.getItem("PS5_V26_CHECKPOINT");
-
-    if (old)
-        log("Previous checkpoint: " + old);
-
-    log("User agent:");
-    log(navigator.userAgent);
-    log("");
-
-    log("SVGElement: " + typeof SVGElement);
-    log("SVGPathElement: " + typeof SVGPathElement);
-    log("SVGAnimationElement: " + typeof SVGAnimationElement);
-
-    log("");
-    log("Starting V26...");
-    log("");
-
-    await testA();
-    await testB();
-    await testC();
-    await testD();
-    await testE();
-    await testF();
-
-    checkpoint("V26", "COMPLETE");
-
-    statusBox.textContent =
-        anomalies || exceptions ?
-        "STATUS: ANOMALY" :
-        "STATUS: NORMAL";
 
     log("");
     log("==============================");
-    log("TESTS COMPLETED: 6");
-    log("PASS: " + pass);
+    log("V27 RESULT");
+    log("==============================");
+
+    log("BEGIN EVENTS: " + beginCount);
+    log("END EVENTS: " + endCount);
+    log("REPEATED BEGIN EVENTS: " + repeatBegin);
     log("EXCEPTIONS: " + exceptions);
     log("ANOMALIES: " + anomalies);
+
+    if (!exceptions && !anomalies) {
+        statusBox.textContent = "STATUS: NORMAL";
+    } else {
+        statusBox.textContent = "STATUS: CHECK RESULT";
+    }
+
     log("==============================");
 
-    document.querySelector("#run").disabled = false;
+    /*
+     * Don't automatically rerun this test.
+     */
+    runButton.disabled = false;
 }
 
-document.querySelector("#run").onclick = run;
+runButton.onclick = run;
 </script>
