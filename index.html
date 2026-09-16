@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V35.1 Minimal TransformStream Test</title>
+<title>PS5 13.60 - V35.2 TransformStream Substitution</title>
 
 <style>
 body {
@@ -24,10 +24,10 @@ pre {
 }
 </style>
 
-<h2>PS5 13.60 — V35.1</h2>
-<p>Minimal TransformStream iterator control</p>
+<h2>PS5 13.60 — V35.2</h2>
+<p>Single TransformStream iterator substitution</p>
 
-<button id="run">RUN V35.1</button>
+<button id="run">RUN V35.2</button>
 <div id="status">READY</div>
 <pre id="log"></pre>
 
@@ -43,31 +43,20 @@ const originalIterator =
 
 let iteratorCalls = 0;
 let nextCalls = 0;
+let substitutionCount = 0;
 
 function log(x) {
     out.textContent += x + "\n";
     console.log(x);
 }
 
-function checkpoint(x) {
-    /*
-     * Use both localStorage and the URL hash.
-     *
-     * The hash gives us another browser-visible
-     * indication if localStorage doesn't survive.
-     */
-
+function cp(x) {
     try {
         localStorage.setItem(
-            "V351_CHECKPOINT",
+            "V352_CHECKPOINT",
             x
         );
-    } catch(e) {}
-
-    try {
-        location.hash =
-            encodeURIComponent(x);
-    } catch(e) {}
+    } catch (_) {}
 
     log("[CP] " + x);
 }
@@ -77,46 +66,39 @@ function restore() {
         originalIterator;
 }
 
-function previousCheckpoint() {
-
-    let stored = null;
-
+function previous() {
     try {
-        stored =
+        const x =
             localStorage.getItem(
-                "V351_CHECKPOINT"
+                "V352_CHECKPOINT"
             );
-    } catch(e) {}
 
-    if (stored) {
-        log(
-            "PREVIOUS CHECKPOINT: " +
-            stored
-        );
-    }
+        if (x)
+            log(
+                "PREVIOUS CHECKPOINT: " +
+                x
+            );
 
-    if (location.hash) {
-        log(
-            "URL CHECKPOINT: " +
-            decodeURIComponent(
-                location.hash.slice(1)
-            )
-        );
-    }
+    } catch (_) {}
 }
 
-async function run() {
+function run() {
 
     button.disabled = true;
+    out.textContent = "";
+
+    iteratorCalls = 0;
+    nextCalls = 0;
+    substitutionCount = 0;
 
     statusBox.textContent =
         "STATUS: RUNNING";
 
+    log("PS5 13.60 — V35.2");
+    log(
+        "TransformStream Single Substitution"
+    );
     log("");
-    log("==========================");
-    log("V35.1 START");
-    log("==========================");
-
     log(navigator.userAgent);
     log("");
 
@@ -124,42 +106,28 @@ async function run() {
         typeof TransformStream !==
         "function"
     ) {
-        log(
-            "TransformStream unavailable"
-        );
+        log("TransformStream unsupported");
 
         statusBox.textContent =
-            "UNSUPPORTED";
+            "STATUS: UNSUPPORTED";
 
         button.disabled = false;
         return;
     }
 
-    checkpoint(
-        "01_BEFORE_OVERRIDE"
-    );
-
-    /*
-     * Minimal control override.
-     *
-     * Every original array value is returned
-     * unchanged.
-     */
+    cp("01_BEFORE_OVERRIDE");
 
     Array.prototype[Symbol.iterator] =
         function() {
 
             iteratorCalls++;
 
-            const array = this;
-            let index = 0;
+            const thisIterator =
+                iteratorCalls;
 
-            /*
-             * Avoid logging from inside here.
-             *
-             * console/logging code may itself use
-             * arrays and would contaminate the test.
-             */
+            const array = this;
+
+            let index = 0;
 
             return {
                 next() {
@@ -167,88 +135,97 @@ async function run() {
                     nextCalls++;
 
                     if (
-                        index >=
-                        array.length
+                        index >= array.length
                     ) {
                         return {
-                            value:undefined,
-                            done:true
+                            done:true,
+                            value:undefined
                         };
                     }
 
+                    let value =
+                        array[index];
+
+                    /*
+                     * V35.1 showed two apparent
+                     * 3-element iterations.
+                     *
+                     * Change ONE value only:
+                     *
+                     * second value returned from
+                     * the first 3-element array.
+                     */
+
+                    if (
+                        thisIterator === 1 &&
+                        array.length === 3 &&
+                        index === 1
+                    ) {
+
+                        cp(
+                            "03_BEFORE_SUBSTITUTION"
+                        );
+
+                        value = {
+                            marker:
+                                "V352_SUBSTITUTE",
+                            index:1
+                        };
+
+                        substitutionCount++;
+
+                        cp(
+                            "04_SUBSTITUTION_READY"
+                        );
+                    }
+
+                    index++;
+
                     return {
-                        value:
-                            array[index++],
-                        done:false
+                        done:false,
+                        value:value
                     };
                 }
             };
         };
 
-    checkpoint(
-        "02_OVERRIDE_INSTALLED"
-    );
+    cp("02_OVERRIDE_INSTALLED");
 
     let stream = null;
+    let thrown = null;
 
     try {
 
-        checkpoint(
-            "03_BEFORE_TRANSFORMSTREAM"
+        cp(
+            "05_BEFORE_TRANSFORMSTREAM"
         );
 
         stream =
             new TransformStream();
 
-        checkpoint(
-            "04_TRANSFORMSTREAM_RETURNED"
+        cp(
+            "06_TRANSFORMSTREAM_RETURNED"
         );
 
     } catch(e) {
 
-        /*
-         * Restore before logging the exception.
-         */
+        thrown = e;
 
-        restore();
-
-        checkpoint(
-            "04_CONSTRUCTOR_EXCEPTION"
+        cp(
+            "06_TRANSFORMSTREAM_EXCEPTION"
         );
-
-        log(
-            "Constructor exception:"
-        );
-
-        log(
-            e.name +
-            ": " +
-            e.message
-        );
-
-        statusBox.textContent =
-            "STATUS: EXCEPTION";
-
-        button.disabled = false;
-
-        return;
     }
 
     /*
-     * Restore immediately.
+     * Restore the global iterator before doing
+     * any further logging/DOM operations.
      */
 
     restore();
 
-    checkpoint(
-        "05_ITERATOR_RESTORED"
-    );
+    cp("07_ITERATOR_RESTORED");
 
     log("");
-    log(
-        "TransformStream constructor: SUCCESS"
-    );
-
     log(
         "iteratorCalls = " +
         iteratorCalls
@@ -259,52 +236,68 @@ async function run() {
         nextCalls
     );
 
-    if (stream) {
-
-        log(
-            "readable = " +
-            typeof stream.readable
-        );
-
-        log(
-            "writable = " +
-            typeof stream.writable
-        );
-    }
-
-    checkpoint(
-        "06_COMPLETE"
+    log(
+        "substitutions = " +
+        substitutionCount
     );
 
-    log("");
-    log("==========================");
-    log("V35.1 RESULT");
-    log("==========================");
+    if (thrown) {
 
-    if (iteratorCalls === 0) {
+        log("");
+        log(
+            "Constructor threw:"
+        );
 
         log(
-            "Array iterator NOT observed"
+            thrown.name +
+            ": " +
+            thrown.message
         );
+
+        /*
+         * A normal TypeError is useful:
+         * the implementation rejected our
+         * substituted JS value.
+         */
+
+        if (
+            thrown instanceof TypeError
+        ) {
+            log(
+                "RESULT: NORMAL TYPE CHECK"
+            );
+        } else {
+            log(
+                "RESULT: OTHER EXCEPTION"
+            );
+        }
 
     } else {
 
+        log("");
         log(
-            "Array iterator WAS observed"
+            "TransformStream returned normally"
+        );
+
+        if (stream) {
+
+            log(
+                "readable = " +
+                typeof stream.readable
+            );
+
+            log(
+                "writable = " +
+                typeof stream.writable
+            );
+        }
+
+        log(
+            "RESULT: SUBSTITUTION ACCEPTED"
         );
     }
 
-    log(
-        "iteratorCalls: " +
-        iteratorCalls
-    );
-
-    log(
-        "nextCalls: " +
-        nextCalls
-    );
-
-    log("==========================");
+    cp("08_COMPLETE");
 
     statusBox.textContent =
         "STATUS: COMPLETE";
@@ -312,12 +305,7 @@ async function run() {
     button.disabled = false;
 }
 
-
-/*
- * Show previous state before doing anything.
- */
-
-previousCheckpoint();
+previous();
 
 button.onclick = run;
 
