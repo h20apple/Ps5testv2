@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V21.1 Detached Range Diagnostic</title>
+<title>PS5 13.60 — V22 Frame Lifetime Probe</title>
 
 <style>
 body {
@@ -14,12 +14,11 @@ body {
 button {
     font:16px monospace;
     padding:10px;
-    margin-right:8px;
 }
 #log {
-    background:#17233a;
-    padding:14px;
     margin-top:12px;
+    padding:14px;
+    background:#17233a;
     white-space:pre-wrap;
 }
 .ok   { color:#59ff7a; }
@@ -31,123 +30,59 @@ button {
 
 <body>
 
-<h2>PS5 13.60 — V21.1 Detached Range Diagnostic</h2>
+<h2>PS5 13.60 — V22 Frame Lifetime Probe</h2>
 
-<button onclick="runV211()">RUN V21.1</button>
-<button onclick="clearCP()">CLEAR CHECKPOINT</button>
+<button onclick="runV22()">RUN V22</button>
 
 <div id="log"></div>
-<div id="sandbox"></div>
+<div id="host"></div>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V211_CP";
+const KEY = "PS5_V22_CHECKPOINT";
 
-const logBox =
-    document.getElementById("log");
-
-const sandbox =
-    document.getElementById("sandbox");
+const logBox = document.getElementById("log");
+const host = document.getElementById("host");
 
 let seq = 0;
+let pass = 0;
+let exceptions = 0;
+let anomalies = 0;
 
-function log(text, cls="") {
-
-    const d =
-        document.createElement("div");
-
-    d.textContent = text;
+function log(s, cls="") {
+    const d = document.createElement("div");
+    d.textContent = s;
     d.className = cls;
-
     logBox.appendChild(d);
 }
 
-function checkpoint(phase, detail="") {
+function cp(test, phase) {
 
     seq++;
-
-    const record = {
-        status:"RUNNING",
-        phase:phase,
-        detail:detail,
-        sequence:seq,
-        time:Date.now()
-    };
 
     try {
         localStorage.setItem(
             KEY,
-            JSON.stringify(record)
+            JSON.stringify({
+                status:"RUNNING",
+                test:test,
+                phase:phase,
+                sequence:seq,
+                time:Date.now()
+            })
         );
     } catch(e) {}
 
     log(
-        seq + ": " +
-        phase +
-        (detail ? " — " + detail : ""),
+        seq + ": [" + test + "] " + phase,
         "info"
     );
 }
 
-function clearCP() {
+function completed() {
 
     try {
-        localStorage.removeItem(KEY);
-    } catch(e) {}
-
-    log("Checkpoint cleared.", "warn");
-}
-
-function previous() {
-
-    try {
-
-        const raw =
-            localStorage.getItem(KEY);
-
-        if (!raw)
-            return;
-
-        const x =
-            JSON.parse(raw);
-
-        if (x.status !== "RUNNING")
-            return;
-
-        log(
-            "******************************",
-            "bad"
-        );
-
-        log(
-            "PREVIOUS V21.1 DID NOT COMPLETE",
-            "bad"
-        );
-
-        log(
-            "LAST PHASE: " + x.phase,
-            "bad"
-        );
-
-        if (x.detail)
-            log(
-                "DETAIL: " + x.detail,
-                "bad"
-            );
-
-        log(
-            "******************************",
-            "bad"
-        );
-
-    } catch(e) {}
-}
-
-function complete() {
-
-    try {
-
         localStorage.setItem(
             KEY,
             JSON.stringify({
@@ -155,381 +90,439 @@ function complete() {
                 time:Date.now()
             })
         );
+    } catch(e) {}
+}
+
+function previous() {
+
+    try {
+
+        const raw = localStorage.getItem(KEY);
+
+        if (!raw)
+            return;
+
+        const x = JSON.parse(raw);
+
+        if (x.status === "RUNNING") {
+
+            log(
+                "********************************",
+                "bad"
+            );
+
+            log(
+                "PREVIOUS V22 DID NOT COMPLETE",
+                "bad"
+            );
+
+            log(
+                "TEST: " + x.test,
+                "bad"
+            );
+
+            log(
+                "LAST PHASE: " + x.phase,
+                "bad"
+            );
+
+            log(
+                "********************************",
+                "bad"
+            );
+        }
 
     } catch(e) {}
 }
 
 function delay(ms) {
-
     return new Promise(
         resolve => setTimeout(resolve, ms)
     );
 }
 
-function nodeDescription(node) {
+function makeFrame() {
 
-    if (!node)
-        return "NULL";
+    const f = document.createElement("iframe");
 
-    let result =
-        "type=" + node.nodeType +
-        " name=" + node.nodeName;
+    f.srcdoc =
+        "<!doctype html>" +
+        "<html><body>" +
+        "<div id='inside'>FRAME_OK</div>" +
+        "<input id='input'>" +
+        "</body></html>";
 
-    if (node.nodeType === 3) {
+    host.appendChild(f);
 
-        result +=
-            ' data="' +
-            node.data +
-            '"';
-    }
-
-    if (node.id)
-        result +=
-            " id=" + node.id;
-
-    return result;
+    return f;
 }
 
-function rangeSnapshot(label, range) {
+function waitFrame(frame) {
 
-    let text;
+    return new Promise((resolve,reject) => {
 
-    try {
-        text = range.toString();
-    } catch(e) {
-        text =
-            "[toString exception: " +
-            e.name + "]";
+        const timer = setTimeout(
+            () => reject(
+                new Error("FRAME_LOAD_TIMEOUT")
+            ),
+            4000
+        );
+
+        frame.onload = function() {
+            clearTimeout(timer);
+            resolve();
+        };
+    });
+}
+
+
+/* TEST A
+ *
+ * Keep contentWindow/document references,
+ * then remove iframe.
+ */
+
+async function testA() {
+
+    const name = "A_RETAIN_AFTER_REMOVE";
+
+    cp(name,"CREATE_FRAME");
+
+    const frame = makeFrame();
+
+    await waitFrame(frame);
+
+    cp(name,"FRAME_LOADED");
+
+    const win = frame.contentWindow;
+    const doc = frame.contentDocument;
+
+    const inside =
+        doc.getElementById("inside");
+
+    cp(name,"REFERENCES_CAPTURED");
+
+    if (
+        !inside ||
+        inside.textContent !== "FRAME_OK"
+    ) {
+        anomalies++;
+        log("Initial frame state unexpected","bad");
     }
 
-    log(
-        "----- " + label + " -----",
-        "warn"
-    );
+    cp(name,"REMOVE_FRAME");
+
+    frame.remove();
+
+    cp(name,"FRAME_REMOVED");
+
+    await Promise.resolve();
+
+    cp(name,"READ_RETAINED_REFERENCES");
+
+    /*
+     * Merely observe JS-visible state.
+     */
 
     try {
-
+        void win.closed;
+        void doc.readyState;
+        void inside.textContent;
+    } catch(e) {
+        exceptions++;
         log(
-            "text = [" + text + "]"
+            "Retained reference exception: " +
+            e.name + ": " + e.message,
+            "warn"
         );
+    }
 
-        log(
-            "collapsed = " +
-            range.collapsed
-        );
+    cp(name,"COMPLETE");
+    pass++;
+}
 
-        log(
-            "startOffset = " +
-            range.startOffset
-        );
 
-        log(
-            "endOffset = " +
-            range.endOffset
-        );
+/* TEST B
+ *
+ * Remove iframe from an event dispatched
+ * inside its own document.
+ */
 
-        log(
-            "startContainer = " +
-            nodeDescription(
-                range.startContainer
-            )
-        );
+async function testB() {
 
-        log(
-            "endContainer = " +
-            nodeDescription(
-                range.endContainer
-            )
-        );
+    const name = "B_EVENT_REMOVAL";
 
-        log(
-            "commonAncestor = " +
-            nodeDescription(
-                range.commonAncestorContainer
-            )
-        );
+    cp(name,"CREATE_FRAME");
 
+    const frame = makeFrame();
+
+    await waitFrame(frame);
+
+    const win = frame.contentWindow;
+    const doc = frame.contentDocument;
+
+    const input =
+        doc.getElementById("input");
+
+    cp(name,"INSTALL_EVENT");
+
+    input.addEventListener(
+        "focus",
+        function() {
+
+            cp(name,"FOCUS_ENTER");
+
+            frame.remove();
+
+            cp(name,"FRAME_REMOVED_IN_EVENT");
+
+            /*
+             * Observe references while the
+             * callback is still executing.
+             */
+
+            void doc.readyState;
+            void win.closed;
+
+            cp(name,"FOCUS_EXIT");
+        }
+    );
+
+    cp(name,"BEFORE_FOCUS");
+
+    input.focus();
+
+    cp(name,"AFTER_FOCUS");
+
+    await delay(100);
+
+    cp(name,"COMPLETE");
+    pass++;
+}
+
+
+/* TEST C
+ *
+ * Replace iframe document while retaining
+ * references to the old document/nodes.
+ */
+
+async function testC() {
+
+    const name = "C_DOCUMENT_REPLACE";
+
+    cp(name,"CREATE_FRAME");
+
+    const frame = makeFrame();
+
+    await waitFrame(frame);
+
+    const win = frame.contentWindow;
+
+    const oldDoc =
+        frame.contentDocument;
+
+    const oldNode =
+        oldDoc.getElementById("inside");
+
+    cp(name,"OLD_REFERENCES_CAPTURED");
+
+    const newDoc =
+        win.document;
+
+    cp(name,"DOCUMENT_OPEN");
+
+    newDoc.open();
+
+    cp(name,"DOCUMENT_WRITE");
+
+    newDoc.write(
+        "<!doctype html>" +
+        "<html><body>" +
+        "<div id='new'>NEW_DOCUMENT</div>" +
+        "</body></html>"
+    );
+
+    cp(name,"DOCUMENT_CLOSE");
+
+    newDoc.close();
+
+    cp(name,"READ_OLD_REFERENCES");
+
+    try {
+        void oldDoc.readyState;
+        void oldNode.textContent;
+        void oldNode.ownerDocument;
     } catch(e) {
 
+        exceptions++;
+
         log(
-            "SNAPSHOT EXCEPTION: " +
-            e.name + ": " +
-            e.message,
+            "Old document exception: " +
+            e.name + ": " + e.message,
+            "warn"
+        );
+    }
+
+    cp(name,"CHECK_NEW_DOCUMENT");
+
+    const n =
+        frame.contentDocument
+             .getElementById("new");
+
+    if (
+        !n ||
+        n.textContent !== "NEW_DOCUMENT"
+    ) {
+        anomalies++;
+        log(
+            "New document mismatch",
             "bad"
         );
     }
+
+    frame.remove();
+
+    cp(name,"COMPLETE");
+    pass++;
 }
 
-async function runV211() {
+
+/* TEST D
+ *
+ * Remove and then reattach the same iframe
+ * element while retaining old references.
+ */
+
+async function testD() {
+
+    const name = "D_REMOVE_REATTACH";
+
+    cp(name,"CREATE_FRAME");
+
+    const frame = makeFrame();
+
+    await waitFrame(frame);
+
+    const oldWin =
+        frame.contentWindow;
+
+    const oldDoc =
+        frame.contentDocument;
+
+    cp(name,"REMOVE");
+
+    frame.remove();
+
+    await Promise.resolve();
+
+    cp(name,"REATTACH");
+
+    host.appendChild(frame);
+
+    await delay(150);
+
+    cp(name,"READ_REFERENCES");
+
+    try {
+
+        void oldWin.closed;
+        void oldDoc.readyState;
+
+        const currentWin =
+            frame.contentWindow;
+
+        void currentWin.closed;
+
+    } catch(e) {
+
+        exceptions++;
+
+        log(
+            "Reattach exception: " +
+            e.name + ": " + e.message,
+            "warn"
+        );
+    }
+
+    frame.remove();
+
+    cp(name,"COMPLETE");
+    pass++;
+}
+
+
+async function runV22() {
 
     logBox.innerHTML = "";
+    host.innerHTML = "";
 
     previous();
 
     seq = 0;
+    pass = 0;
+    exceptions = 0;
+    anomalies = 0;
 
-    log(
-        "V21.1 START",
-        "info"
-    );
-
+    log("V22 START","info");
     log(navigator.userAgent);
     log("");
 
     try {
 
-        checkpoint(
-            "CREATE_DOM"
-        );
+        await testA();
+        await delay(200);
 
-        sandbox.innerHTML =
-            '<div id="outside">OUTSIDE</div>' +
-            '<div id="root">' +
-                '<div id="parent">' +
-                    '<span id="span">AAAA</span>' +
-                    '<b id="bold">BBBB</b>' +
-                '</div>' +
-            '</div>';
+        await testB();
+        await delay(200);
 
-        const root =
-            document.getElementById("root");
+        await testC();
+        await delay(200);
 
-        const parent =
-            document.getElementById("parent");
+        await testD();
 
-        const span =
-            document.getElementById("span");
-
-        const text =
-            span.firstChild;
-
-        /*
-         * Keep explicit JS references to all
-         * relevant nodes after detachment.
-         */
-
-        checkpoint(
-            "CREATE_RANGE"
-        );
-
-        const range =
-            document.createRange();
-
-        range.setStart(
-            text,
-            0
-        );
-
-        range.setEnd(
-            text,
-            text.length
-        );
-
-        checkpoint(
-            "BEFORE_REMOVE"
-        );
-
-        rangeSnapshot(
-            "BEFORE REMOVE",
-            range
-        );
-
-        log(
-            "text.data before = [" +
-            text.data +
-            "]"
-        );
-
-        log(
-            "root.isConnected before = " +
-            root.isConnected
-        );
-
-        log(
-            "text.isConnected before = " +
-            text.isConnected
-        );
-
-        /*
-         * This is the exact operation that
-         * produced the V21 mismatch.
-         */
-
-        checkpoint(
-            "REMOVE_ROOT"
-        );
-
-        root.remove();
-
-        checkpoint(
-            "IMMEDIATELY_AFTER_REMOVE"
-        );
-
-        rangeSnapshot(
-            "IMMEDIATELY AFTER REMOVE",
-            range
-        );
-
-        log(
-            "text.data after = [" +
-            text.data +
-            "]"
-        );
-
-        log(
-            "root.isConnected after = " +
-            root.isConnected
-        );
-
-        log(
-            "parent.isConnected after = " +
-            parent.isConnected
-        );
-
-        log(
-            "text.isConnected after = " +
-            text.isConnected
-        );
-
-        /*
-         * Check again after the current
-         * synchronous JS execution finishes.
-         */
-
-        checkpoint(
-            "BEFORE_MICROTASK"
-        );
-
-        await Promise.resolve();
-
-        checkpoint(
-            "AFTER_MICROTASK"
-        );
-
-        rangeSnapshot(
-            "AFTER MICROTASK",
-            range
-        );
-
-        log(
-            "detached text.data = [" +
-            text.data +
-            "]"
-        );
-
-        /*
-         * And once more after an event-loop
-         * turn.
-         */
-
-        checkpoint(
-            "BEFORE_DELAY"
-        );
-
-        await delay(100);
-
-        checkpoint(
-            "AFTER_100MS"
-        );
-
-        rangeSnapshot(
-            "AFTER 100MS",
-            range
-        );
-
-        log(
-            "detached text.data = [" +
-            text.data +
-            "]"
-        );
-
-        /*
-         * Directly verify that our retained
-         * detached node remains coherent.
-         */
-
-        checkpoint(
-            "DETACHED_NODE_INTEGRITY"
-        );
-
-        let nodeOK =
-            text.data === "AAAA" &&
-            text.parentNode === span &&
-            span.parentNode === parent &&
-            parent.parentNode === root &&
-            root.isConnected === false;
-
-        log(
-            "Detached subtree integrity = " +
-            (nodeOK ? "OK" : "UNEXPECTED"),
-            nodeOK ? "ok" : "bad"
-        );
-
-        checkpoint(
-            "FINAL_RANGE_READ"
-        );
-
-        let finalText =
-            range.toString();
-
-        log(
-            "FINAL range.toString() = [" +
-            finalText +
-            "]"
-        );
-
-        complete();
+        completed();
 
         log("");
         log(
-            "======= V21.1 RESULT =======",
+            "======= V22 RESULT =======",
             "info"
         );
 
         log(
-            "COMPLETED: YES",
-            "ok"
+            "STATUS: " +
+            (
+                anomalies === 0
+                    ? "NORMAL"
+                    : "ANOMALY"
+            ),
+            anomalies === 0
+                ? "ok"
+                : "bad"
         );
 
-        log(
-            "DETACHED NODE TEXT: [" +
-            text.data +
-            "]"
-        );
+        log("TESTS COMPLETED: 4");
+        log("PASS: " + pass);
+        log("EXCEPTIONS: " + exceptions);
+        log("ANOMALIES: " + anomalies);
 
         log(
-            "RANGE TEXT: [" +
-            finalText +
-            "]"
-        );
-
-        log(
-            "NODE INTEGRITY: " +
-            (nodeOK ? "OK" : "UNEXPECTED"),
-            nodeOK ? "ok" : "bad"
-        );
-
-        log(
-            "============================",
+            "==========================",
             "info"
         );
 
     } catch(e) {
 
-        checkpoint(
-            "EXCEPTION",
-            e.name + ": " + e.message
+        cp(
+            "HARNESS",
+            "UNCAUGHT_EXCEPTION"
         );
 
         log("");
-        log(
-            "V21.1 STOPPED",
-            "bad"
-        );
+        log("V22 STOPPED","bad");
 
         log(
-            e.name + ": " +
-            e.message,
+            e.name + ": " + e.message,
             "bad"
         );
     }
