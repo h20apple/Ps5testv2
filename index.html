@@ -1,12 +1,12 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V27 SVG Animation Reparent Diagnostic</title>
+<title>PS5 13.60 - V28 SMIL Reparent Comparison</title>
 
 <style>
 body {
     background:#111;
     color:#eee;
-    font:16px monospace;
+    font:15px monospace;
     padding:18px;
 }
 button {
@@ -14,9 +14,9 @@ button {
     padding:10px 18px;
 }
 #status {
-    margin:16px 0;
-    padding:12px;
     border:1px solid #555;
+    padding:10px;
+    margin:15px 0;
 }
 pre {
     white-space:pre-wrap;
@@ -29,10 +29,10 @@ svg {
 }
 </style>
 
-<h2>PS5 13.60 — V27</h2>
-<div>SVG/SMIL animation reparent diagnostic</div>
+<h2>PS5 13.60 — V28</h2>
+<div>SVG/SMIL synchronous reparent comparison</div>
 
-<p><button id="run">RUN V27</button></p>
+<p><button id="run">RUN V28</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -42,345 +42,732 @@ svg {
 
 const NS = "http://www.w3.org/2000/svg";
 
-const logBox = document.querySelector("#log");
-const statusBox = document.querySelector("#status");
-const runButton = document.querySelector("#run");
+const out = document.querySelector("#log");
+const status = document.querySelector("#status");
+const button = document.querySelector("#run");
 
-let beginCount = 0;
-let endCount = 0;
-let repeatBegin = 0;
 let exceptions = 0;
 let anomalies = 0;
 
-function log(text) {
-    logBox.textContent += text + "\n";
-    console.log(text);
+function log(s) {
+    out.textContent += s + "\n";
+    console.log(s);
 }
 
-function cp(stage) {
+function cp(s) {
     try {
-        localStorage.setItem("PS5_V27_CHECKPOINT", stage);
+        localStorage.setItem("PS5_V28_CHECKPOINT", s);
     } catch (_) {}
 
-    log("[CP] " + stage);
+    log("[CP] " + s);
 }
 
-function svg(name) {
+function make(name) {
     return document.createElementNS(NS, name);
 }
 
-function describe(node) {
-    if (!node)
-        return "null";
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    return (
-        node.nodeName +
-        " connected=" + node.isConnected +
-        " parent=" +
-        (node.parentNode ? node.parentNode.nodeName : "null")
+function safe(fn) {
+    try {
+        return fn();
+    } catch (e) {
+        return "EXCEPTION:" + e.name;
+    }
+}
+
+function info(root, anim, left, right) {
+
+    const parent =
+        anim.parentNode === left ? "LEFT" :
+        anim.parentNode === right ? "RIGHT" :
+        anim.parentNode ?
+            anim.parentNode.nodeName :
+            "null";
+
+    return {
+        parent: parent,
+
+        connected: anim.isConnected,
+
+        svgTime: safe(() =>
+            root.getCurrentTime().toFixed(4)
+        ),
+
+        startTime: safe(() =>
+            anim.getStartTime().toFixed(4)
+        ),
+
+        leftWidth: safe(() =>
+            left.getAttribute("width")
+        ),
+
+        rightWidth: safe(() =>
+            right.getAttribute("width")
+        )
+    };
+}
+
+function dump(label, data) {
+
+    log(
+        label +
+        " parent=" + data.parent +
+        " connected=" + data.connected +
+        " svgTime=" + data.svgTime +
+        " startTime=" + data.startTime +
+        " leftWidth=" + data.leftWidth +
+        " rightWidth=" + data.rightWidth
     );
 }
 
-function layout(node) {
+function buildTree() {
+
+    const root = make("svg");
+
+    root.setAttribute("width", "200");
+    root.setAttribute("height", "100");
+
+    const left = make("rect");
+
+    left.setAttribute("x", "0");
+    left.setAttribute("y", "0");
+    left.setAttribute("width", "20");
+    left.setAttribute("height", "20");
+
+    const right = make("rect");
+
+    right.setAttribute("x", "50");
+    right.setAttribute("y", "0");
+    right.setAttribute("width", "30");
+    right.setAttribute("height", "20");
+
+    const anim = make("animate");
+
+    anim.setAttribute("attributeName", "width");
+    anim.setAttribute("from", "20");
+    anim.setAttribute("to", "80");
+    anim.setAttribute("dur", "0.10s");
+    anim.setAttribute("begin", "indefinite");
+    anim.setAttribute("fill", "freeze");
+
+    left.appendChild(anim);
+
+    root.appendChild(left);
+    root.appendChild(right);
+
+    document.body.appendChild(root);
+
+    return {
+        root,
+        left,
+        right,
+        anim
+    };
+}
+
+
+/*
+ * CASE A
+ *
+ * Control:
+ * beginElement() with no reparent.
+ */
+
+async function caseA() {
+
+    const name = "A_CONTROL";
+
+    cp(name + ":CREATE");
+
+    const {
+        root,
+        left,
+        right,
+        anim
+    } = buildTree();
+
+    let begins = 0;
+    let ends = 0;
+
     try {
-        const r = node.getBoundingClientRect();
+
+        anim.addEventListener(
+            "beginEvent",
+            function(e) {
+
+                begins++;
+
+                cp(
+                    name +
+                    ":BEGIN_" +
+                    begins
+                );
+
+                log(
+                    "[A BEGIN #" +
+                    begins +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[A STATE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+            }
+        );
+
+        anim.addEventListener(
+            "endEvent",
+            function(e) {
+
+                ends++;
+
+                cp(
+                    name +
+                    ":END_" +
+                    ends
+                );
+
+                log(
+                    "[A END #" +
+                    ends +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[A END STATE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+            }
+        );
+
+        cp(name + ":BEFORE_BEGIN");
+
+        anim.beginElement();
+
+        cp(name + ":AFTER_BEGIN_RETURN");
+
+        await sleep(400);
+
+        dump(
+            "[A FINAL]",
+            info(
+                root,
+                anim,
+                left,
+                right
+            )
+        );
 
         log(
-            "[LAYOUT] x=" + r.x +
-            " y=" + r.y +
-            " w=" + r.width +
-            " h=" + r.height
+            "[A RESULT] begins=" +
+            begins +
+            " ends=" +
+            ends
+        );
+
+        return {
+            begins,
+            ends
+        };
+
+    } finally {
+
+        root.remove();
+
+        cp(name + ":COMPLETE");
+    }
+}
+
+
+/*
+ * CASE B
+ *
+ * Reparent synchronously while WebKit
+ * is delivering beginEvent.
+ */
+
+async function caseB() {
+
+    const name = "B_SYNC_REPARENT";
+
+    cp(name + ":CREATE");
+
+    const {
+        root,
+        left,
+        right,
+        anim
+    } = buildTree();
+
+    let begins = 0;
+    let ends = 0;
+    let moved = false;
+
+    try {
+
+        anim.addEventListener(
+            "beginEvent",
+            function(e) {
+
+                begins++;
+
+                cp(
+                    name +
+                    ":BEGIN_" +
+                    begins +
+                    "_ENTER"
+                );
+
+                log(
+                    "[B BEGIN #" +
+                    begins +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[B BEFORE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+
+                if (!moved) {
+
+                    moved = true;
+
+                    cp(
+                        name +
+                        ":BEFORE_SYNC_MOVE"
+                    );
+
+                    right.appendChild(anim);
+
+                    cp(
+                        name +
+                        ":AFTER_SYNC_MOVE"
+                    );
+
+                    dump(
+                        "[B AFTER MOVE]",
+                        info(
+                            root,
+                            anim,
+                            left,
+                            right
+                        )
+                    );
+
+                    /*
+                     * Force observable style/layout work
+                     * while retained DOM wrappers remain
+                     * available.
+                     */
+
+                    safe(() =>
+                        root.getBoundingClientRect()
+                    );
+
+                    safe(() =>
+                        left.getBoundingClientRect()
+                    );
+
+                    safe(() =>
+                        right.getBoundingClientRect()
+                    );
+
+                    void document.body.offsetHeight;
+                }
+
+                cp(
+                    name +
+                    ":BEGIN_" +
+                    begins +
+                    "_EXIT"
+                );
+            }
+        );
+
+        anim.addEventListener(
+            "endEvent",
+            function(e) {
+
+                ends++;
+
+                cp(
+                    name +
+                    ":END_" +
+                    ends
+                );
+
+                log(
+                    "[B END #" +
+                    ends +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[B END STATE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+            }
+        );
+
+        cp(name + ":BEFORE_BEGIN");
+
+        anim.beginElement();
+
+        cp(name + ":AFTER_BEGIN_RETURN");
+
+        await sleep(400);
+
+        dump(
+            "[B FINAL]",
+            info(
+                root,
+                anim,
+                left,
+                right
+            )
+        );
+
+        log(
+            "[B RESULT] begins=" +
+            begins +
+            " ends=" +
+            ends
+        );
+
+        return {
+            begins,
+            ends
+        };
+
+    } finally {
+
+        root.remove();
+
+        cp(name + ":COMPLETE");
+    }
+}
+
+
+/*
+ * CASE C
+ *
+ * Reparent outside the callback.
+ *
+ * This establishes whether moving an active
+ * animation normally causes another beginEvent.
+ */
+
+async function caseC() {
+
+    const name = "C_ASYNC_REPARENT";
+
+    cp(name + ":CREATE");
+
+    const {
+        root,
+        left,
+        right,
+        anim
+    } = buildTree();
+
+    let begins = 0;
+    let ends = 0;
+
+    try {
+
+        anim.addEventListener(
+            "beginEvent",
+            function(e) {
+
+                begins++;
+
+                cp(
+                    name +
+                    ":BEGIN_" +
+                    begins
+                );
+
+                log(
+                    "[C BEGIN #" +
+                    begins +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[C BEGIN STATE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+            }
+        );
+
+        anim.addEventListener(
+            "endEvent",
+            function(e) {
+
+                ends++;
+
+                cp(
+                    name +
+                    ":END_" +
+                    ends
+                );
+
+                log(
+                    "[C END #" +
+                    ends +
+                    "] eventTime=" +
+                    e.timeStamp
+                );
+
+                dump(
+                    "[C END STATE]",
+                    info(
+                        root,
+                        anim,
+                        left,
+                        right
+                    )
+                );
+            }
+        );
+
+        cp(name + ":BEFORE_BEGIN");
+
+        anim.beginElement();
+
+        cp(name + ":AFTER_BEGIN_RETURN");
+
+        /*
+         * Important difference from B:
+         * this executes after beginElement()
+         * and its immediate event processing
+         * have returned.
+         */
+
+        await sleep(20);
+
+        cp(name + ":BEFORE_ASYNC_MOVE");
+
+        dump(
+            "[C BEFORE MOVE]",
+            info(
+                root,
+                anim,
+                left,
+                right
+            )
+        );
+
+        right.appendChild(anim);
+
+        cp(name + ":AFTER_ASYNC_MOVE");
+
+        dump(
+            "[C AFTER MOVE]",
+            info(
+                root,
+                anim,
+                left,
+                right
+            )
+        );
+
+        safe(() =>
+            root.getBoundingClientRect()
         );
 
         void document.body.offsetHeight;
 
-    } catch (e) {
-        log("[LAYOUT_EXCEPTION] " + e);
+        await sleep(400);
+
+        dump(
+            "[C FINAL]",
+            info(
+                root,
+                anim,
+                left,
+                right
+            )
+        );
+
+        log(
+            "[C RESULT] begins=" +
+            begins +
+            " ends=" +
+            ends
+        );
+
+        return {
+            begins,
+            ends
+        };
+
+    } finally {
+
+        root.remove();
+
+        cp(name + ":COMPLETE");
     }
 }
 
-function wait(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 async function run() {
 
-    runButton.disabled = true;
-    logBox.textContent = "";
+    button.disabled = true;
 
-    beginCount = 0;
-    endCount = 0;
-    repeatBegin = 0;
+    out.textContent = "";
+
     exceptions = 0;
     anomalies = 0;
 
-    statusBox.textContent = "RUNNING";
+    status.textContent = "RUNNING";
 
-    const previous =
-        localStorage.getItem("PS5_V27_CHECKPOINT");
+    const old =
+        localStorage.getItem(
+            "PS5_V28_CHECKPOINT"
+        );
 
-    if (previous)
-        log("Previous checkpoint: " + previous);
+    if (old) {
+        log(
+            "Previous checkpoint: " +
+            old
+        );
+    }
 
-    log("UA:");
+    log("PS5 13.60 - V28");
     log(navigator.userAgent);
+
+    log("");
+    log(
+        "SVGAnimationElement=" +
+        typeof SVGAnimationElement
+    );
+
     log("");
 
-    let root = null;
+    let A = null;
+    let B = null;
+    let C = null;
 
     try {
 
-        cp("CREATE");
+        A = await caseA();
 
-        root = svg("svg");
-        root.setAttribute("width", "200");
-        root.setAttribute("height", "100");
+        await sleep(100);
 
-        const left = svg("rect");
-        const right = svg("rect");
+        B = await caseB();
 
-        left.id = "left";
-        right.id = "right";
+        await sleep(100);
 
-        left.setAttribute("x", "0");
-        left.setAttribute("y", "0");
-        left.setAttribute("width", "20");
-        left.setAttribute("height", "20");
+        C = await caseC();
 
-        right.setAttribute("x", "50");
-        right.setAttribute("y", "0");
-        right.setAttribute("width", "30");
-        right.setAttribute("height", "20");
-
-        const anim = svg("animate");
-
-        anim.id = "animation";
-
-        anim.setAttribute("attributeName", "width");
-        anim.setAttribute("from", "20");
-        anim.setAttribute("to", "80");
-        anim.setAttribute("dur", "0.10s");
-        anim.setAttribute("begin", "indefinite");
-        anim.setAttribute("fill", "freeze");
-
-        left.appendChild(anim);
-
-        root.appendChild(left);
-        root.appendChild(right);
-
-        document.body.appendChild(root);
-
-        log("[INITIAL]");
-        log("left:  " + describe(left));
-        log("right: " + describe(right));
-        log("anim:  " + describe(anim));
-        log("");
-
-        /*
-         * Important:
-         * V26 appeared to deliver beginEvent more than once after
-         * reparenting. V27 records that behaviour instead of assuming
-         * that a second event is an error.
-         */
-
-        anim.addEventListener("beginEvent", function () {
-
-            beginCount++;
-
-            cp("BEGIN_" + beginCount + "_ENTER");
-
-            log(
-                "[BEGIN #" + beginCount + "] " +
-                describe(anim)
-            );
-
-            /*
-             * Only perform the reparent on the first callback.
-             * Subsequent callbacks are observation-only.
-             */
-
-            if (beginCount === 1) {
-
-                cp("BEFORE_REPARENT");
-
-                log(
-                    "[BEFORE REPARENT] " +
-                    describe(anim)
-                );
-
-                right.appendChild(anim);
-
-                cp("AFTER_REPARENT");
-
-                log(
-                    "[AFTER REPARENT] " +
-                    describe(anim)
-                );
-
-                log(
-                    "[OLD TARGET] " +
-                    describe(left)
-                );
-
-                log(
-                    "[NEW TARGET] " +
-                    describe(right)
-                );
-
-                layout(root);
-
-            } else {
-
-                repeatBegin++;
-
-                cp(
-                    "REPEATED_BEGIN_" +
-                    beginCount
-                );
-
-                log(
-                    "[REPEATED BEGIN] count=" +
-                    beginCount
-                );
-
-                log(
-                    "[CURRENT OWNER] " +
-                    describe(anim)
-                );
-
-                /*
-                 * Retained old/new wrappers are intentionally read,
-                 * but we don't perform heap reclamation or memory
-                 * manipulation.
-                 */
-
-                log(
-                    "[LEFT RETAINED] " +
-                    describe(left)
-                );
-
-                log(
-                    "[RIGHT RETAINED] " +
-                    describe(right)
-                );
-
-                layout(root);
-            }
-
-            cp(
-                "BEGIN_" +
-                beginCount +
-                "_EXIT"
-            );
-        });
-
-
-        anim.addEventListener("endEvent", function () {
-
-            endCount++;
-
-            cp("END_" + endCount + "_ENTER");
-
-            log(
-                "[END #" + endCount + "] " +
-                describe(anim)
-            );
-
-            log(
-                "[LEFT] " +
-                describe(left)
-            );
-
-            log(
-                "[RIGHT] " +
-                describe(right)
-            );
-
-            layout(root);
-
-            cp(
-                "END_" +
-                endCount +
-                "_EXIT"
-            );
-        });
-
-
-        cp("BEFORE_BEGIN_ELEMENT");
+        cp("V28:FINAL_ANALYSIS");
 
         log("");
-        log("[CALL] anim.beginElement()");
-
-        anim.beginElement();
-
-        cp("AFTER_BEGIN_ELEMENT_RETURN");
-
-        /*
-         * Give SMIL enough time to dispatch begin/end events.
-         */
-
-        await wait(500);
-
-        cp("FINAL_VERIFY");
-
-        log("");
-        log("===== FINAL DOM STATE =====");
+        log("==============================");
+        log("V28 COMPARISON");
+        log("==============================");
 
         log(
-            "animation: " +
-            describe(anim)
+            "CONTROL      begins=" +
+            A.begins +
+            " ends=" +
+            A.ends
         );
 
         log(
-            "left:      " +
-            describe(left)
+            "SYNC MOVE    begins=" +
+            B.begins +
+            " ends=" +
+            B.ends
         );
 
         log(
-            "right:     " +
-            describe(right)
+            "ASYNC MOVE   begins=" +
+            C.begins +
+            " ends=" +
+            C.ends
         );
 
-        log("");
-        log("===== EVENT COUNTS =====");
-
-        log("beginEvent: " + beginCount);
-        log("endEvent: " + endCount);
-        log("repeated beginEvent: " + repeatBegin);
-
         /*
-         * These aren't automatically treated as vulnerabilities.
-         * We're recording unexpected observable state separately.
+         * This isn't automatically a security
+         * anomaly. It highlights the behavioural
+         * difference we're investigating.
          */
 
-        if (!anim.isConnected) {
-            anomalies++;
+        if (
+            B.begins > A.begins &&
+            B.begins > C.begins
+        ) {
+
+            log("");
             log(
-                "[ANOMALY] animation unexpectedly disconnected"
+                "[OBSERVATION] Extra beginEvent is specific " +
+                "to synchronous callback reparenting."
+            );
+
+        } else if (
+            B.begins > A.begins &&
+            C.begins > A.begins
+        ) {
+
+            log("");
+            log(
+                "[OBSERVATION] Reparenting itself restarts/" +
+                "reinitializes the animation."
+            );
+
+        } else {
+
+            log("");
+            log(
+                "[OBSERVATION] No unique synchronous " +
+                "reparent behaviour detected."
             );
         }
 
-        if (anim.parentNode !== right) {
-            anomalies++;
-            log(
-                "[ANOMALY] final animation parent is not RIGHT"
-            );
-        }
-
-        if (beginCount === 0) {
-            anomalies++;
-            log(
-                "[ANOMALY] beginEvent never fired"
-            );
-        }
-
-        cp("V27_COMPLETE");
+        cp("V28:COMPLETE");
 
     } catch (e) {
 
         exceptions++;
 
-        cp("TOP_LEVEL_EXCEPTION");
+        cp("V28:EXCEPTION");
 
         log("");
         log("[EXCEPTION] " + e);
@@ -388,33 +775,23 @@ async function run() {
         try {
             log(e.stack || "");
         } catch (_) {}
-
     }
 
     log("");
     log("==============================");
-    log("V27 RESULT");
+    log("V28 RESULT");
     log("==============================");
-
-    log("BEGIN EVENTS: " + beginCount);
-    log("END EVENTS: " + endCount);
-    log("REPEATED BEGIN EVENTS: " + repeatBegin);
     log("EXCEPTIONS: " + exceptions);
     log("ANOMALIES: " + anomalies);
-
-    if (!exceptions && !anomalies) {
-        statusBox.textContent = "STATUS: NORMAL";
-    } else {
-        statusBox.textContent = "STATUS: CHECK RESULT";
-    }
-
     log("==============================");
 
-    /*
-     * Don't automatically rerun this test.
-     */
-    runButton.disabled = false;
+    status.textContent =
+        exceptions || anomalies ?
+        "STATUS: CHECK RESULT" :
+        "STATUS: NORMAL";
+
+    button.disabled = false;
 }
 
-runButton.onclick = run;
+button.onclick = run;
 </script>
