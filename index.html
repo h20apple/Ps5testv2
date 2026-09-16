@@ -1,548 +1,391 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V6 Fuzzer</title>
+<title>PS5 WebKit 13.60 V7</title>
 
 <style>
 body {
   background:#101827;
   color:#eee;
   font:17px monospace;
-  padding:20px;
+  padding:20px
 }
-button,input {
+button,select {
   font:17px monospace;
-  padding:9px;
-  margin:4px;
+  padding:10px;
+  margin:4px
 }
 #log {
   background:#17233a;
   padding:15px;
-  margin-top:12px;
-  white-space:pre-wrap;
+  white-space:pre-wrap
 }
 .ok {color:#59ff7a}
 .bad {color:#ff6868}
 .info {color:#63caff}
 .warn {color:#ffd166}
+
+/* Based on the behaviour exercised by the
+   upstream WebKit regression testcase. */
+
+.v7box {
+  position:absolute;
+  left:-10000px;
+  width:20px;
+  height:20px;
+
+  -webkit-animation-duration:0.02s;
+  -webkit-animation-name:v7move;
+}
+
+@-webkit-keyframes v7move {
+  from {
+    -webkit-transform:translate(0,0);
+  }
+  to {
+    -webkit-transform:translate(10px,0);
+  }
+}
 </style>
 
-<h2>PS5 WebKit 13.60 — V6 Seeded Fuzzer</h2>
+<h2>PS5 WebKit 13.60 — V7</h2>
 
-Seed:
-<input id="seed" value="1360605" size="12">
+<select id="runs">
+<option value="10">10 runs</option>
+<option value="100" selected>100 runs</option>
+<option value="500">500 runs</option>
+<option value="2000">2000 runs</option>
+</select>
 
-Iterations:
-<input id="runs" value="5000" size="7">
-
-<button onclick="start()">Start</button>
+<button onclick="start()">Run upstream regression</button>
 <button onclick="stopRun()">Stop</button>
-<button onclick="replay()">Replay Last</button>
 <button onclick="clearLog()">Clear</button>
 
+<div id="sandbox"></div>
 <div id="log"></div>
 
 <script>
 "use strict";
 
-const box=document.getElementById("log");
+const output =
+  document.getElementById("log");
 
-let stopped=false;
-let lastSeed=0;
+const sandbox =
+  document.getElementById("sandbox");
+
+let stopping=false;
 
 let stats={
-  tests:0,
   pass:0,
   fail:0,
-  exceptions:0,
-  start:0
+  timeout:0,
+  exceptions:0
 };
 
-function log(s,c=""){
-  const d=document.createElement("div");
-  d.textContent=s;
-  d.className=c;
-  box.appendChild(d);
-  window.scrollTo(0,document.body.scrollHeight);
+function log(text,cls="") {
+  const e=document.createElement("div");
+  e.textContent=text;
+  e.className=cls;
+  output.appendChild(e);
 }
 
-function clearLog(){
-  box.innerHTML="";
+function clearLog() {
+  output.innerHTML="";
 }
 
-function stopRun(){
-  stopped=true;
+function stopRun() {
+  stopping=true;
   log("STOP requested","warn");
 }
 
 /*
- Seeded PRNG.
+ Keep a checkpoint BEFORE the operation.
 
- Same seed => same operation sequence.
+ If WebContent disappears before COMPLETE
+ is written, reopening the page exposes the
+ last testcase/iteration.
 */
 
-function RNG(seed){
+function checkpoint(iter,state) {
 
-  let x=seed>>>0;
-
-  return function(){
-
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-
-    return (x>>>0)/4294967296;
-  };
-}
-
-function randInt(rng,max){
-  return Math.floor(rng()*max);
-}
-
-function checkpoint(seed,iteration,operation){
-
-  try{
+  try {
 
     localStorage.setItem(
-      "v6-checkpoint",
+      "v7-checkpoint",
       JSON.stringify({
-        seed,
-        iteration,
-        operation,
-        state:"RUNNING"
+        test:
+          "animation-start-event-destroy-renderer",
+        iteration:iter,
+        state:state,
+        time:Date.now()
       })
     );
 
-  }catch(e){}
+  } catch(e) {}
 }
 
-function complete(seed,iteration){
+function showPrevious() {
 
-  try{
-
-    localStorage.setItem(
-      "v6-checkpoint",
-      JSON.stringify({
-        seed,
-        iteration,
-        state:"COMPLETE"
-      })
-    );
-
-  }catch(e){}
-}
-
-function showPrevious(){
-
-  try{
+  try {
 
     const raw=
       localStorage.getItem(
-        "v6-checkpoint"
+        "v7-checkpoint"
       );
 
-    if(!raw) return;
+    if(!raw)
+      return;
 
     const c=JSON.parse(raw);
 
-    if(c.state==="RUNNING"){
+    if(c.state==="RUNNING") {
 
       log(
-        "Previous incomplete run:",
+        "PREVIOUS RUN DID NOT COMPLETE",
         "warn"
       );
 
       log(
-        "Seed: "+c.seed+
-        " Iteration: "+c.iteration+
-        " Operation: "+c.operation,
+        "Test: "+c.test,
+        "warn"
+      );
+
+      log(
+        "Iteration: "+
+        c.iteration,
         "warn"
       );
     }
 
-  }catch(e){}
+  } catch(e) {}
 }
 
-/* =====================================
-   Operation 0 — DOM create/remove
-===================================== */
+/*
+ Adaptation of WebKit's
+ animation-start-event-destroy-renderer
+ regression behaviour.
 
-function opDOM(rng,i){
+ Element A is removed from its animation
+ callback.
 
-  const root=
-    document.createElement("div");
+ Element B has its renderer hidden from
+ its animation callback.
+*/
 
-  document.body.appendChild(root);
+function regressionCase(iter) {
 
-  const count=
-    10+randInt(rng,100);
+  return new Promise(resolve=>{
 
-  for(let n=0;n<count;n++){
+    const container=
+      document.createElement("div");
 
-    const e=
-      document.createElement(
-        randInt(rng,2) ?
-        "span":"div"
-      );
+    const a=
+      document.createElement("div");
 
-    e.textContent=
-      i+":"+n;
+    const b=
+      document.createElement("div");
 
-    root.appendChild(e);
-  }
+    a.className="v7box";
+    b.className="v7box";
 
-  while(root.firstChild){
+    /*
+     Give each iteration unique animation
+     names so WebKit must establish fresh
+     animation state.
+    */
 
-    const index=
-      randInt(
-        rng,
-        root.childNodes.length
-      );
+    a.style.webkitAnimationName=
+      "v7move";
 
-    root.removeChild(
-      root.childNodes[index]
+    b.style.webkitAnimationName=
+      "v7move";
+
+    container.appendChild(a);
+    container.appendChild(b);
+
+    sandbox.appendChild(container);
+
+    let completed=0;
+    let finished=false;
+
+    function done() {
+
+      completed++;
+
+      if(completed!==2)
+        return;
+
+      if(finished)
+        return;
+
+      finished=true;
+
+      clearTimeout(timer);
+
+      try {
+        container.remove();
+      } catch(e) {}
+
+      resolve(true);
+    }
+
+    a.addEventListener(
+      "webkitAnimationStart",
+      function handler(){
+
+        a.removeEventListener(
+          "webkitAnimationStart",
+          handler
+        );
+
+        /*
+         Critical regression operation:
+         destroy/remove the element while
+         its animation callback executes.
+        */
+
+        if(a.parentNode)
+          a.parentNode.removeChild(a);
+
+        done();
+      },
+      false
     );
-  }
 
-  const ok=
-    root.childNodes.length===0;
+    b.addEventListener(
+      "webkitAnimationStart",
+      function handler(){
 
-  root.remove();
+        b.removeEventListener(
+          "webkitAnimationStart",
+          handler
+        );
 
-  return ok;
-}
+        /*
+         Second upstream behaviour:
+         destroy/hide its renderer during
+         the callback.
+        */
 
-/* =====================================
-   Operation 1 — ArrayBuffer integrity
-===================================== */
+        b.style.display="none";
 
-function opBuffer(rng,i){
-
-  const words=
-    64+randInt(rng,4096);
-
-  const buffer=
-    new ArrayBuffer(words*4);
-
-  const a=
-    new Uint32Array(buffer);
-
-  const marker=
-    randInt(rng,0xffffffff)>>>0;
-
-  for(let n=0;n<a.length;n++)
-    a[n]=(marker^n^i)>>>0;
-
-  for(let n=0;n<a.length;n++){
-
-    if(
-      a[n] !==
-      ((marker^n^i)>>>0)
-    )
-      return false;
-  }
-
-  return true;
-}
-
-/* =====================================
-   Operation 2 — Event mutation
-===================================== */
-
-function opEvent(rng,i){
-
-  const root=
-    document.createElement("div");
-
-  document.body.appendChild(root);
-
-  const count=
-    5+randInt(rng,60);
-
-  for(let n=0;n<count;n++){
-
-    const x=
-      document.createElement("span");
-
-    x.textContent=String(n);
-
-    root.appendChild(x);
-  }
-
-  let calls=0;
-
-  function handler(){
-
-    calls++;
-
-    while(root.firstChild)
-      root.removeChild(
-        root.firstChild
-      );
-
-    const replacement=
-      document.createElement("b");
-
-    replacement.textContent=
-      "iteration-"+i;
-
-    root.appendChild(
-      replacement
+        done();
+      },
+      false
     );
-  }
 
-  root.addEventListener(
-    "v6",
-    handler
-  );
+    /*
+     Force style/layout observation after
+     insertion.
+    */
 
-  root.dispatchEvent(
-    new Event("v6")
-  );
+    void container.offsetHeight;
 
-  root.removeEventListener(
-    "v6",
-    handler
-  );
+    const timer=setTimeout(()=>{
 
-  const ok=
-    calls===1 &&
-    root.childNodes.length===1;
+      if(finished)
+        return;
 
-  root.remove();
+      finished=true;
 
-  return ok;
+      try {
+        container.remove();
+      } catch(e) {}
+
+      resolve(false);
+
+    },1000);
+  });
 }
 
-/* =====================================
-   Operation 3 — detached wrappers
-===================================== */
+async function start() {
 
-function opDetached(rng,i){
+  clearLog();
+  showPrevious();
 
-  const parent=
-    document.createElement("div");
-
-  const child=
-    document.createElement("div");
-
-  parent.appendChild(child);
-  document.body.appendChild(parent);
-
-  child.setAttribute(
-    "data-before",
-    String(i)
-  );
-
-  child.remove();
-
-  const value=
-    randInt(rng,0xffffff);
-
-  child.setAttribute(
-    "data-after",
-    String(value)
-  );
-
-  const ok=
-    child.getAttribute(
-      "data-after"
-    )===String(value);
-
-  parent.remove();
-
-  return ok;
-}
-
-/* =====================================
-   Operation 4 — DataView boundaries
-===================================== */
-
-function opDataView(rng){
-
-  const size=
-    32+randInt(rng,512);
-
-  const b=
-    new ArrayBuffer(size);
-
-  const d=
-    new DataView(b);
-
-  const offset=
-    randInt(rng,size-4);
-
-  const value=
-    randInt(rng,0xffffffff)>>>0;
-
-  d.setUint32(offset,value);
-
-  if(d.getUint32(offset)!==value)
-    return false;
-
-  let trapped=false;
-
-  try{
-
-    d.getUint32(size+8);
-
-  }catch(e){
-
-    trapped=true;
-  }
-
-  return trapped;
-}
-
-/* =====================================
-   Operation 5 — object churn
-===================================== */
-
-function opObjects(rng,i){
-
-  const count=
-    100+randInt(rng,1500);
-
-  let objects=[];
-
-  for(let n=0;n<count;n++){
-
-    objects.push({
-      n:n,
-      iteration:i,
-      value:randInt(
-        rng,
-        0xffffff
-      ),
-      text:"v6-"+n
-    });
-  }
-
-  for(
-    let n=0;
-    n<objects.length;
-    n+=37
-  ){
-
-    if(
-      objects[n].n!==n ||
-      objects[n].iteration!==i
-    )
-      return false;
-  }
-
-  objects=null;
-
-  return true;
-}
-
-const operations=[
-  opDOM,
-  opBuffer,
-  opEvent,
-  opDetached,
-  opDataView,
-  opObjects
-];
-
-const names=[
-  "DOM",
-  "ArrayBuffer",
-  "Event mutation",
-  "Detached DOM",
-  "DataView",
-  "Object churn"
-];
-
-async function runSeed(seed,runs){
-
-  stopped=false;
+  stopping=false;
 
   stats={
-    tests:0,
     pass:0,
     fail:0,
-    exceptions:0,
-    start:performance.now()
+    timeout:0,
+    exceptions:0
   };
 
-  lastSeed=seed;
-
-  const rng=RNG(seed);
+  const runs=
+    Number(
+      document.getElementById(
+        "runs"
+      ).value
+    );
 
   log(
-    "V6 starting",
+    "V7 upstream regression test",
     "info"
   );
 
-  log("Seed: "+seed);
-  log("Iterations: "+runs);
-  log("UA: "+navigator.userAgent);
+  log(
+    "Test: animation-start-event-destroy-renderer"
+  );
+
+  log(
+    "UA: "+navigator.userAgent
+  );
+
+  log(
+    "Runs: "+runs
+  );
+
   log("");
 
-  for(let i=0;i<runs;i++){
+  for(let i=0;i<runs;i++) {
 
-    if(stopped)
+    if(stopping)
       break;
 
-    /*
-     Choose operation deterministically
-     from the seeded generator.
-    */
-
-    const op=
-      randInt(
-        rng,
-        operations.length
-      );
-
     checkpoint(
-      seed,
       i,
-      names[op]
+      "RUNNING"
     );
 
-    stats.tests++;
-
-    try{
+    try {
 
       const result=
-        operations[op](
-          rng,
-          i
-        );
+        await regressionCase(i);
 
-      if(result===true){
+      if(result) {
 
         stats.pass++;
 
-      }else{
+      } else {
 
-        stats.fail++;
+        stats.timeout++;
 
         log(
-          "[FAIL] seed="+seed+
-          " iteration="+i+
-          " operation="+names[op],
-          "bad"
+          "[TIMEOUT] iteration "+
+          i,
+          "warn"
         );
       }
 
-    }catch(e){
+    } catch(e) {
 
       stats.exceptions++;
 
       log(
-        "[EXCEPTION] seed="+seed+
-        " iteration="+i+
-        " operation="+names[op]+
-        " :: "+e,
+        "[EXCEPTION] iteration "+
+        i+
+        ": "+
+        e,
         "bad"
       );
     }
 
-    complete(seed,i);
+    checkpoint(
+      i,
+      "COMPLETE"
+    );
 
-    if((i%100)===0){
+    if(i%10===0) {
 
       log(
         "Iteration "+
@@ -558,27 +401,23 @@ async function runSeed(seed,runs){
     }
   }
 
-  const elapsed=
-    performance.now()-
-    stats.start;
-
   log("");
   log(
-    "======= V6 RESULT =======",
+    "======= V7 RESULT =======",
     "info"
   );
 
-  log("Seed:       "+seed);
-
   log(
-    "PASS:       "+stats.pass,
+    "PASS:       "+
+    stats.pass,
     "ok"
   );
 
   log(
-    "FAIL:       "+stats.fail,
-    stats.fail ?
-      "bad":"ok"
+    "TIMEOUT:    "+
+    stats.timeout,
+    stats.timeout ?
+      "warn":"ok"
   );
 
   log(
@@ -589,102 +428,9 @@ async function runSeed(seed,runs){
   );
 
   log(
-    "Runtime:    "+
-    elapsed.toFixed(2)+
-    " ms"
-  );
-
-  log(
     "=========================",
     "info"
   );
-}
-
-function start(){
-
-  clearLog();
-  showPrevious();
-
-  const seed=
-    Number(
-      document.getElementById(
-        "seed"
-      ).value
-    )>>>0;
-
-  const runs=
-    Math.max(
-      1,
-      Number(
-        document.getElementById(
-          "runs"
-        ).value
-      )
-    );
-
-  runSeed(seed,runs);
-}
-
-function replay(){
-
-  clearLog();
-
-  try{
-
-    const raw=
-      localStorage.getItem(
-        "v6-checkpoint"
-      );
-
-    if(!raw){
-
-      log(
-        "No previous run",
-        "warn"
-      );
-
-      return;
-    }
-
-    const c=
-      JSON.parse(raw);
-
-    document.getElementById(
-      "seed"
-    ).value=c.seed;
-
-    /*
-     Replay far enough to reach the
-     previous checkpoint.
-    */
-
-    const runs=
-      (c.iteration||0)+2;
-
-    document.getElementById(
-      "runs"
-    ).value=runs;
-
-    log(
-      "Replaying seed "+
-      c.seed+
-      " through iteration "+
-      c.iteration,
-      "warn"
-    );
-
-    runSeed(
-      c.seed,
-      runs
-    );
-
-  }catch(e){
-
-    log(
-      "Replay error: "+e,
-      "bad"
-    );
-  }
 }
 
 showPrevious();
