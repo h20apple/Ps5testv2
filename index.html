@@ -1,8 +1,6 @@
 <!doctype html>
-<html>
-<head>
 <meta charset="utf-8">
-<title>PS5 13.60 — V20 SSV Lifetime Matrix</title>
+<title>PS5 13.60 — V21 Range Lifetime Probe</title>
 
 <style>
 body {
@@ -12,771 +10,474 @@ body {
     padding:18px;
 }
 button {
-    font:16px monospace;
     padding:10px;
-    margin:5px;
+    font:16px monospace;
 }
 #log {
-    background:#17233a;
-    padding:14px;
     margin-top:12px;
+    padding:14px;
+    background:#17233a;
     white-space:pre-wrap;
 }
-.ok   { color:#59ff7a; }
-.bad  { color:#ff6868; }
-.warn { color:#ffd166; }
-.info { color:#63caff; }
-#space { height:1500px; }
+.ok { color:#59ff7a }
+.bad { color:#ff6868 }
+.info { color:#63caff }
 </style>
-</head>
 
-<body>
+<h2>PS5 13.60 — V21 Range Lifetime Probe</h2>
 
-<h2>PS5 13.60 — V20 SSV Lifetime Matrix</h2>
-
-<button onclick="runV20()">RUN V20</button>
-<button onclick="clearCP()">CLEAR CHECKPOINT</button>
+<button onclick="run()">RUN V21</button>
 
 <div id="log"></div>
-
-<div id="space"></div>
-
-<a id="v20target" tabindex="0">
-    V20 fragment target
-</a>
+<div id="sandbox"></div>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V20_CP";
+const KEY = "PS5_V21_CP";
 
-const box =
+const out =
     document.getElementById("log");
 
-let sequence = 0;
+const sandbox =
+    document.getElementById("sandbox");
+
+let tests = 0;
+let pass = 0;
+let exceptions = 0;
 let anomalies = 0;
-let blurCount = 0;
-let replaceCount = 0;
 
-function log(text, cls="") {
-
-    const d =
-        document.createElement("div");
-
-    d.textContent = text;
-    d.className = cls;
-
-    box.appendChild(d);
+function log(x, c="") {
+    const d = document.createElement("div");
+    d.textContent = x;
+    d.className = c;
+    out.appendChild(d);
 }
 
-function delay(ms) {
-    return new Promise(
-        resolve => setTimeout(resolve,ms)
-    );
-}
-
-function cp(test, phase, extra="") {
-
-    sequence++;
-
-    const record = {
-        status:"RUNNING",
-        test:test,
-        phase:phase,
-        extra:extra,
-        sequence:sequence,
-        href:location.href,
-        time:Date.now()
-    };
+function cp(test, phase) {
 
     try {
         localStorage.setItem(
             KEY,
-            JSON.stringify(record)
+            JSON.stringify({
+                state:"RUNNING",
+                test:test,
+                phase:phase,
+                time:Date.now()
+            })
         );
     } catch(e) {}
 
     log(
-        sequence +
-        ": [" +
-        test +
-        "] " +
-        phase +
-        (extra ? " — " + extra : ""),
+        "[" + test + "] " + phase,
         "info"
     );
 }
 
-function clearCP() {
-
-    localStorage.removeItem(KEY);
-
-    log(
-        "Checkpoint cleared.",
-        "warn"
-    );
-}
-
-function showPrevious() {
+function previous() {
 
     try {
 
-        const raw =
-            localStorage.getItem(KEY);
+        const x =
+            JSON.parse(
+                localStorage.getItem(KEY)
+            );
 
-        if (!raw)
-            return;
+        if (
+            x &&
+            x.state === "RUNNING"
+        ) {
 
-        const c =
-            JSON.parse(raw);
-
-        if (c.status !== "RUNNING")
-            return;
-
-        log(
-            "********************************",
-            "bad"
-        );
-
-        log(
-            "PREVIOUS V20 DID NOT COMPLETE",
-            "bad"
-        );
-
-        log(
-            "TEST: " + c.test,
-            "bad"
-        );
-
-        log(
-            "LAST PHASE: " + c.phase,
-            "bad"
-        );
-
-        if (c.extra) {
             log(
-                "DETAIL: " + c.extra,
+                "PREVIOUS V21 DID NOT COMPLETE",
+                "bad"
+            );
+
+            log(
+                "TEST: " + x.test,
+                "bad"
+            );
+
+            log(
+                "LAST PHASE: " + x.phase,
                 "bad"
             );
         }
 
-        log(
-            "********************************",
-            "bad"
-        );
-
     } catch(e) {}
 }
 
-function complete() {
+function finish() {
 
-    try {
-
-        localStorage.setItem(
-            KEY,
-            JSON.stringify({
-                status:"COMPLETE",
-                anomalies:anomalies,
-                blur:blurCount,
-                replace:replaceCount,
-                time:Date.now()
-            })
-        );
-
-    } catch(e) {}
-}
-
-function stateText(x) {
-
-    try {
-        return JSON.stringify(x);
-    } catch(e) {
-        return "[cannot stringify]";
-    }
-}
-
-function waitPop(timeout=5000) {
-
-    return new Promise(
-        (resolve,reject) => {
-
-            let done = false;
-
-            const timer =
-                setTimeout(() => {
-
-                    if (done)
-                        return;
-
-                    done = true;
-
-                    removeEventListener(
-                        "popstate",
-                        handler
-                    );
-
-                    reject(
-                        new Error(
-                            "POPSTATE_TIMEOUT"
-                        )
-                    );
-
-                },timeout);
-
-            function handler(e) {
-
-                if (done)
-                    return;
-
-                done = true;
-
-                clearTimeout(timer);
-
-                resolve(e);
-            }
-
-            addEventListener(
-                "popstate",
-                handler
-            );
-        }
+    localStorage.setItem(
+        KEY,
+        JSON.stringify({
+            state:"COMPLETE"
+        })
     );
+}
+
+function resetDOM() {
+
+    sandbox.innerHTML =
+        "<div id='root'>" +
+            "<div id='a'>" +
+                "<span>AAAA</span>" +
+                "<b>BBBB</b>" +
+            "</div>" +
+            "<div id='b'>" +
+                "<i>CCCC</i>" +
+                "<em>DDDD</em>" +
+            "</div>" +
+        "</div>";
+}
+
+function execute(name, fn) {
+
+    tests++;
+
+    cp(name,"START");
+
+    try {
+
+        resetDOM();
+
+        cp(name,"DOM_READY");
+
+        fn();
+
+        cp(name,"COMPLETE");
+
+        pass++;
+
+    } catch(e) {
+
+        exceptions++;
+
+        log(
+            "[" + name + "] " +
+            e.name + ": " +
+            e.message
+        );
+    }
 }
 
 /*
- * Different state-object shapes.
+ * 1 — Extract a range spanning
+ * different branches.
  */
 
-function originalState(test) {
+function extractCrossBranch() {
 
-    return {
-        type:"original",
-        test:test,
-        marker:0x2020,
-        text:"V20_ORIGINAL",
-        nested:{
-            a:1,
-            b:2,
-            c:"three"
-        },
-        array:[
-            10,
-            20,
-            30,
-            40
-        ]
-    };
+    const root =
+        sandbox.querySelector("#root");
+
+    const a =
+        sandbox.querySelector("#a span")
+               .firstChild;
+
+    const b =
+        sandbox.querySelector("#b em")
+               .firstChild;
+
+    const r =
+        document.createRange();
+
+    r.setStart(a,1);
+    r.setEnd(b,3);
+
+    cp(
+        "A_EXTRACT",
+        "BEFORE_EXTRACT"
+    );
+
+    const frag =
+        r.extractContents();
+
+    cp(
+        "A_EXTRACT",
+        "AFTER_EXTRACT"
+    );
+
+    if (!frag)
+        anomalies++;
+
+    void root.offsetHeight;
 }
 
-function replacementState(test) {
+/*
+ * 2 — Clone while DOM changes.
+ */
 
-    return {
-        type:"replacement",
-        test:test,
-        marker:0x20FF,
-        text:"V20_REPLACEMENT",
-        nested:{
-            x:"alpha",
-            y:"beta"
-        },
-        array:[
-            "A",
-            "B",
-            "C"
-        ]
-    };
+function cloneThenRemove() {
+
+    const root =
+        sandbox.querySelector("#root");
+
+    const a =
+        sandbox.querySelector("#a");
+
+    const b =
+        sandbox.querySelector("#b");
+
+    const r =
+        document.createRange();
+
+    r.setStartBefore(a);
+    r.setEndAfter(b);
+
+    cp(
+        "B_CLONE_REMOVE",
+        "BEFORE_CLONE"
+    );
+
+    const clone =
+        r.cloneContents();
+
+    cp(
+        "B_CLONE_REMOVE",
+        "REMOVE_CONTAINER"
+    );
+
+    root.remove();
+
+    cp(
+        "B_CLONE_REMOVE",
+        "AFTER_REMOVE"
+    );
+
+    if (!clone)
+        anomalies++;
 }
 
-async function oneTest(name, mode) {
+/*
+ * 3 — Keep Range alive after
+ * its subtree is detached.
+ */
+
+function detachedRange() {
+
+    const root =
+        sandbox.querySelector("#root");
+
+    const text =
+        sandbox.querySelector("#a span")
+               .firstChild;
+
+    const r =
+        document.createRange();
+
+    r.setStart(text,0);
+    r.setEnd(text,4);
 
     cp(
-        name,
-        "TEST_START"
+        "C_DETACHED",
+        "DETACH_ROOT"
     );
 
-    /*
-     * Clean starting entry.
-     */
-
-    history.replaceState(
-        {
-            type:"base",
-            test:name
-        },
-        "",
-        location.pathname
-    );
-
-    const original =
-        originalState(name);
+    root.remove();
 
     cp(
-        name,
-        "PUSH_FRAGMENT",
-        stateText(original)
+        "C_DETACHED",
+        "READ_RANGE"
     );
 
-    history.pushState(
-        original,
-        "",
-        location.pathname +
-        "#v20target"
-    );
+    const value =
+        r.toString();
 
-    history.pushState(
-        {
-            type:"current",
-            test:name,
-            marker:0x2001
-        },
-        "",
-        location.pathname
-    );
-
-    cp(
-        name,
-        "CREATE_FOCUS_ELEMENT"
-    );
-
-    const input =
-        document.createElement("input");
-
-    input.value =
-        "V20 " + name;
-
-    document.body.insertBefore(
-        input,
-        document.body.firstChild
-    );
-
-    let localBlur = 0;
-    let localReplace = 0;
-
-    input.onblur = function() {
-
-        localBlur++;
-        blurCount++;
-
-        cp(
-            name,
-            "BLUR_ENTER"
-        );
-
-        cp(
-            name,
-            "STATE_AT_BLUR",
-            stateText(history.state)
-        );
-
-        /*
-         * MODE 1:
-         * ordinary V17/V18-style replacement.
-         */
-
-        if (mode === 1) {
-
-            cp(
-                name,
-                "BEFORE_REPLACE"
-            );
-
-            history.replaceState(
-                replacementState(name),
-                "",
-                location.href
-            );
-
-            localReplace++;
-            replaceCount++;
-
-            cp(
-                name,
-                "AFTER_REPLACE",
-                stateText(history.state)
-            );
-        }
-
-        /*
-         * MODE 2:
-         * Remove the focused element while
-         * its blur handler is executing.
-         */
-
-        if (mode === 2) {
-
-            cp(
-                name,
-                "REMOVE_FOCUSED_ELEMENT"
-            );
-
-            input.remove();
-
-            cp(
-                name,
-                "AFTER_ELEMENT_REMOVE"
-            );
-
-            history.replaceState(
-                replacementState(name),
-                "",
-                location.href
-            );
-
-            localReplace++;
-            replaceCount++;
-
-            cp(
-                name,
-                "AFTER_REPLACE",
-                stateText(history.state)
-            );
-        }
-
-        /*
-         * MODE 3:
-         * Two sequential replacements from
-         * the same callback.
-         */
-
-        if (mode === 3) {
-
-            cp(
-                name,
-                "REPLACE_ONE"
-            );
-
-            history.replaceState(
-                {
-                    type:"intermediate",
-                    test:name,
-                    marker:0x2055
-                },
-                "",
-                location.href
-            );
-
-            localReplace++;
-            replaceCount++;
-
-            cp(
-                name,
-                "REPLACE_TWO"
-            );
-
-            history.replaceState(
-                replacementState(name),
-                "",
-                location.href
-            );
-
-            localReplace++;
-            replaceCount++;
-
-            cp(
-                name,
-                "AFTER_SECOND_REPLACE",
-                stateText(history.state)
-            );
-        }
-
-        /*
-         * MODE 4:
-         * More complicated structured state.
-         */
-
-        if (mode === 4) {
-
-            const complex = {
-                type:"complex",
-                test:name,
-                marker:0x20CC,
-
-                strings:[
-                    "one",
-                    "two",
-                    "three"
-                ],
-
-                numbers:[
-                    1,
-                    2,
-                    3,
-                    4,
-                    5
-                ],
-
-                nested:{
-                    level1:{
-                        level2:{
-                            value:
-                            "V20_COMPLEX"
-                        }
-                    }
-                }
-            };
-
-            cp(
-                name,
-                "COMPLEX_REPLACE",
-                stateText(complex)
-            );
-
-            history.replaceState(
-                complex,
-                "",
-                location.href
-            );
-
-            localReplace++;
-            replaceCount++;
-
-            cp(
-                name,
-                "AFTER_COMPLEX_REPLACE",
-                stateText(history.state)
-            );
-        }
-
-        cp(
-            name,
-            "BLUR_EXIT"
-        );
-    };
-
-    cp(
-        name,
-        "BEFORE_FOCUS"
-    );
-
-    input.focus();
-
-    cp(
-        name,
-        "AFTER_FOCUS"
-    );
-
-    await delay(100);
-
-    const pop =
-        waitPop();
-
-    cp(
-        name,
-        "BEFORE_BACK"
-    );
-
-    history.back();
-
-    cp(
-        name,
-        "BACK_RETURNED"
-    );
-
-    const event =
-        await pop;
-
-    cp(
-        name,
-        "POPSTATE",
-        stateText(event.state)
-    );
-
-    cp(
-        name,
-        "HISTORY_STATE",
-        stateText(history.state)
-    );
-
-    await delay(200);
-
-    /*
-     * Original JS object should remain intact.
-     */
-
-    cp(
-        name,
-        "ORIGINAL_INTEGRITY"
-    );
-
-    if (
-        original.type !== "original" ||
-        original.marker !== 0x2020 ||
-        original.text !== "V20_ORIGINAL" ||
-        original.nested.a !== 1 ||
-        original.array[2] !== 30
-    ) {
+    if (value !== "AAAA") {
 
         anomalies++;
 
-        cp(
-            name,
-            "ORIGINAL_OBJECT_ANOMALY",
-            stateText(original)
+        log(
+            "Detached Range mismatch: " +
+            value,
+            "bad"
         );
     }
+}
 
-    if (localBlur !== 1) {
+/*
+ * 4 — Delete contents spanning
+ * several ancestors.
+ */
 
-        anomalies++;
+function deleteCrossBranch() {
 
-        cp(
-            name,
-            "BLUR_COUNT_ANOMALY",
-            String(localBlur)
-        );
-    }
+    const root =
+        sandbox.querySelector("#root");
 
-    if (localReplace < 1) {
+    const t1 =
+        sandbox.querySelector("#a span")
+               .firstChild;
 
-        anomalies++;
+    const t2 =
+        sandbox.querySelector("#b em")
+               .firstChild;
 
-        cp(
-            name,
-            "REPLACE_COUNT_ANOMALY",
-            String(localReplace)
-        );
-    }
+    const r =
+        document.createRange();
 
-    /*
-     * Remove it here if mode 2 didn't
-     * already remove it.
-     */
+    r.setStart(t1,2);
+    r.setEnd(t2,2);
 
-    input.onblur = null;
+    cp(
+        "D_DELETE",
+        "BEFORE_DELETE"
+    );
 
-    if (input.parentNode)
-        input.remove();
+    r.deleteContents();
 
-    history.replaceState(
-        null,
-        "",
-        location.pathname
+    cp(
+        "D_DELETE",
+        "AFTER_DELETE"
+    );
+
+    void root.offsetHeight;
+}
+
+/*
+ * 5 — Extract then mutate the
+ * surviving Range/container.
+ */
+
+function extractAndMutate() {
+
+    const root =
+        sandbox.querySelector("#root");
+
+    const a =
+        sandbox.querySelector("#a");
+
+    const b =
+        sandbox.querySelector("#b");
+
+    const r =
+        document.createRange();
+
+    r.setStartBefore(a);
+    r.setEndAfter(b);
+
+    cp(
+        "E_EXTRACT_MUTATE",
+        "EXTRACT"
+    );
+
+    const fragment =
+        r.extractContents();
+
+    cp(
+        "E_EXTRACT_MUTATE",
+        "MUTATE"
+    );
+
+    root.appendChild(
+        document.createTextNode(
+            "replacement"
+        )
     );
 
     cp(
-        name,
-        "TEST_COMPLETE"
+        "E_EXTRACT_MUTATE",
+        "READ_RANGE"
     );
 
-    /*
-     * Keep well clear of the History API
-     * rate limit encountered in V19.
-     */
+    r.toString();
 
-    await delay(1000);
+    if (!fragment)
+        anomalies++;
 }
 
-async function runV20() {
+async function run() {
 
-    box.innerHTML = "";
+    out.innerHTML = "";
 
-    showPrevious();
+    previous();
 
-    sequence = 0;
+    tests = 0;
+    pass = 0;
+    exceptions = 0;
     anomalies = 0;
-    blurCount = 0;
-    replaceCount = 0;
 
     log(
-        "V20 START",
+        "V21 START",
+        "info"
+    );
+
+    log(navigator.userAgent);
+    log("");
+
+    execute(
+        "A_EXTRACT",
+        extractCrossBranch
+    );
+
+    await new Promise(
+        r => setTimeout(r,100)
+    );
+
+    execute(
+        "B_CLONE_REMOVE",
+        cloneThenRemove
+    );
+
+    await new Promise(
+        r => setTimeout(r,100)
+    );
+
+    execute(
+        "C_DETACHED",
+        detachedRange
+    );
+
+    await new Promise(
+        r => setTimeout(r,100)
+    );
+
+    execute(
+        "D_DELETE",
+        deleteCrossBranch
+    );
+
+    await new Promise(
+        r => setTimeout(r,100)
+    );
+
+    execute(
+        "E_EXTRACT_MUTATE",
+        extractAndMutate
+    );
+
+    finish();
+
+    log("");
+    log(
+        "======= V21 RESULT =======",
         "info"
     );
 
     log(
-        navigator.userAgent
+        "STATUS: " +
+        (
+            anomalies === 0
+                ? "NORMAL"
+                : "ANOMALY"
+        ),
+        anomalies === 0
+            ? "ok"
+            : "bad"
     );
 
-    log("");
+    log("TESTS: " + tests);
+    log("PASS: " + pass);
+    log("EXCEPTIONS: " + exceptions);
+    log("ANOMALIES: " + anomalies);
 
-    try {
-
-        await oneTest(
-            "A_NORMAL",
-            1
-        );
-
-        await oneTest(
-            "B_REMOVE_DURING_BLUR",
-            2
-        );
-
-        await oneTest(
-            "C_DOUBLE_REPLACE",
-            3
-        );
-
-        await oneTest(
-            "D_COMPLEX_STATE",
-            4
-        );
-
-        complete();
-
-        log("");
-        log(
-            "======= V20 RESULT =======",
-            "info"
-        );
-
-        log(
-            "STATUS: " +
-            (
-                anomalies === 0
-                    ? "NORMAL"
-                    : "ANOMALY"
-            ),
-            anomalies === 0
-                ? "ok"
-                : "bad"
-        );
-
-        log(
-            "TESTS COMPLETED: 4"
-        );
-
-        log(
-            "BLUR CALLBACKS: " +
-            blurCount
-        );
-
-        log(
-            "REPLACE CALLS: " +
-            replaceCount
-        );
-
-        log(
-            "ANOMALIES: " +
-            anomalies
-        );
-
-        log(
-            "==========================",
-            "info"
-        );
-
-    } catch(e) {
-
-        cp(
-            "HARNESS",
-            "JS_EXCEPTION",
-            String(e)
-        );
-
-        log("");
-        log(
-            "V20 STOPPED",
-            "bad"
-        );
-
-        log(
-            String(e),
-            "bad"
-        );
-    }
+    log(
+        "==========================",
+        "info"
+    );
 }
 
-showPrevious();
-
+previous();
 </script>
-</body>
-</html>
