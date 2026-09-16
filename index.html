@@ -2,41 +2,53 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 PoC V2</title>
+<title>PS5 WebKit 13.60 PoC V3</title>
 
 <style>
 body {
-    background:#111827;
-    color:#eee;
-    font:18px monospace;
-    padding:20px;
+  background:#101827;
+  color:#eee;
+  font:17px monospace;
+  padding:20px;
 }
-
-button {
-    font-size:18px;
-    padding:12px 20px;
-    margin:5px;
+button, select {
+  font:17px monospace;
+  padding:10px 15px;
+  margin:4px;
 }
-
 #log {
-    background:#172033;
-    padding:18px;
-    margin-top:15px;
-    white-space:pre-wrap;
+  background:#17233a;
+  padding:16px;
+  margin-top:15px;
+  white-space:pre-wrap;
 }
-
-.ok   { color:#5cff79; }
-.fail { color:#ff7070; }
-.info { color:#65c7ff; }
+.ok {color:#59ff7a}
+.bad {color:#ff6868}
+.info {color:#63caff}
+.warn {color:#ffd166}
 </style>
 </head>
 
 <body>
 
-<h2>PS5 WebKit Diagnostic PoC V2</h2>
+<h2>PS5 WebKit 13.60 — Reproducer V3</h2>
 
-<button onclick="runV2()">Run V2 PoC</button>
-<button onclick="allocationTest()">Memory Test</button>
+<select id="case">
+  <option value="all">All diagnostic cases</option>
+  <option value="typed">TypedArray integrity</option>
+  <option value="view">DataView bounds</option>
+  <option value="objects">Object churn</option>
+  <option value="dom">DOM churn</option>
+</select>
+
+<select id="runs">
+  <option value="100">100 runs</option>
+  <option value="500" selected>500 runs</option>
+  <option value="2000">2000 runs</option>
+</select>
+
+<button onclick="start()">Run V3</button>
+<button onclick="stop()">Stop</button>
 <button onclick="clearLog()">Clear</button>
 
 <div id="log"></div>
@@ -44,598 +56,486 @@ button {
 <script>
 "use strict";
 
-const output = document.getElementById("log");
+const logbox = document.getElementById("log");
 
-let stats = {
-    tests:0,
-    pass:0,
-    fail:0,
-    anomaly:0,
-    start:0
+let abort = false;
+
+let result = {
+  tests:0,
+  passed:0,
+  failed:0,
+  anomalies:0,
+  last:0,
+  start:0
 };
 
-function log(text, cls) {
-    const line = document.createElement("div");
-
-    line.textContent = text;
-
-    if (cls)
-        line.className = cls;
-
-    output.appendChild(line);
-
-    window.scrollTo(
-        0,
-        document.body.scrollHeight
-    );
+function log(s,c="") {
+  const d=document.createElement("div");
+  d.textContent=s;
+  d.className=c;
+  logbox.appendChild(d);
+  window.scrollTo(0,document.body.scrollHeight);
 }
 
 function clearLog() {
-    output.innerHTML = "";
+  logbox.innerHTML="";
+}
+
+function stop() {
+  abort=true;
+  log("STOP requested","warn");
 }
 
 function reset() {
-    stats.tests = 0;
-    stats.pass = 0;
-    stats.fail = 0;
-    stats.anomaly = 0;
-    stats.start = performance.now();
+  abort=false;
+
+  result={
+    tests:0,
+    passed:0,
+    failed:0,
+    anomalies:0,
+    last:0,
+    start:performance.now()
+  };
 }
 
-function test(name, fn) {
+/*
+ Store progress in sessionStorage.
 
-    stats.tests++;
+ If WebKit reloads, this gives us the last
+ iteration that completed.
+*/
 
-    try {
+function checkpoint(name,i) {
 
-        if (!fn())
-            throw new Error("unexpected result");
+  try {
 
-        stats.pass++;
-        return true;
-
-    } catch(e) {
-
-        stats.fail++;
-
-        log(
-            "[FAIL] " + name +
-            " : " + e,
-            "fail"
-        );
-
-        return false;
-    }
-}
-
-/* ===============================
-   ArrayBuffer integrity
-================================ */
-
-function bufferTest(iteration) {
-
-    const size = 0x4000;
-
-    const buffer =
-        new ArrayBuffer(size);
-
-    const u32 =
-        new Uint32Array(buffer);
-
-    for (
-        let i = 0;
-        i < u32.length;
-        i++
-    ) {
-
-        u32[i] =
-            (0x12340000 ^
-             iteration ^
-             i) >>> 0;
-    }
-
-    for (
-        let i = 0;
-        i < u32.length;
-        i++
-    ) {
-
-        const expected =
-            (0x12340000 ^
-             iteration ^
-             i) >>> 0;
-
-        if (u32[i] !== expected) {
-
-            stats.anomaly++;
-
-            log(
-                "[ANOMALY] buffer mismatch" +
-                " iteration=" + iteration +
-                " index=" + i,
-                "fail"
-            );
-
-            return false;
-        }
-    }
-
-    return buffer.byteLength === size;
-}
-
-/* ===============================
-   DataView bounds
-================================ */
-
-function dataViewTest() {
-
-    const b =
-        new ArrayBuffer(64);
-
-    const d =
-        new DataView(b);
-
-    d.setUint32(
-        0,
-        0x41424344
+    sessionStorage.setItem(
+      "v3_checkpoint",
+      JSON.stringify({
+        case:name,
+        iteration:i,
+        time:Date.now()
+      })
     );
 
-    if (
-        d.getUint32(0) !==
-        0x41424344
-    )
-        return false;
-
-    let exception = false;
-
-    try {
-
-        d.getUint32(100);
-
-    } catch(e) {
-
-        exception = true;
-    }
-
-    return exception;
+  } catch(e) {}
 }
 
-/* ===============================
-   TypedArray bounds
-================================ */
+function previousCheckpoint() {
 
-function boundsTest() {
+  try {
 
-    const a =
-        new Uint8Array(32);
+    const x=
+      sessionStorage.getItem(
+        "v3_checkpoint"
+      );
 
-    a[1000] = 0x41;
+    if(x) {
 
-    return (
-        a.length === 32 &&
-        typeof a[1000] ===
-        "undefined"
+      const p=JSON.parse(x);
+
+      log(
+        "Previous checkpoint: "+
+        p.case+
+        " iteration "+
+        p.iteration,
+        "info"
+      );
+    }
+
+  } catch(e) {}
+}
+
+function runTest(name,fn) {
+
+  result.tests++;
+
+  try {
+
+    if(fn() !== true)
+      throw new Error(
+        "unexpected result"
+      );
+
+    result.passed++;
+    return true;
+
+  } catch(e) {
+
+    result.failed++;
+
+    log(
+      "[FAIL] "+name+
+      " :: "+e,
+      "bad"
     );
+
+    return false;
+  }
 }
 
-/* ===============================
-   Allocation pressure
-================================ */
+/* -------------------------
+   TypedArray integrity
+-------------------------- */
 
-function allocationPressure() {
+function typedCase(iter) {
 
-    let blocks = [];
+  const size=0x8000;
 
-    try {
+  const b=
+    new ArrayBuffer(size);
 
-        for (
-            let i = 0;
-            i < 16;
-            i++
-        ) {
+  const a=
+    new Uint32Array(b);
 
-            let buffer =
-                new ArrayBuffer(
-                    1024 * 1024
-                );
+  for(let i=0;i<a.length;i++) {
 
-            let view =
-                new Uint8Array(buffer);
+    a[i]=(
+      0x13572468 ^
+      i ^
+      iter
+    )>>>0;
+  }
 
-            view[0] =
-                i & 0xff;
+  for(let i=0;i<a.length;i++) {
 
-            view[
-                view.length - 1
-            ] =
-                (i ^ 0xff) & 0xff;
+    const expected=(
+      0x13572468 ^
+      i ^
+      iter
+    )>>>0;
 
-            blocks.push(buffer);
-        }
+    if(a[i]!==expected) {
 
-        return true;
+      result.anomalies++;
 
-    } catch(e) {
+      log(
+        "[ANOMALY] TypedArray "+
+        "iteration="+iter+
+        " index="+i,
+        "bad"
+      );
 
-        log(
-            "[INFO] allocator: " + e,
-            "info"
-        );
-
-        return true;
+      return false;
     }
+  }
+
+  return true;
 }
 
-/* ===============================
-   Worker test
-================================ */
+/* -------------------------
+   DataView enforcement
+-------------------------- */
 
-function workerTest() {
+function viewCase() {
 
-    return new Promise(
-        function(resolve) {
+  const b=
+    new ArrayBuffer(128);
 
-        if (
-            typeof Worker ===
-            "undefined"
-        ) {
+  const d=
+    new DataView(b);
 
-            log(
-                "[SKIP] Worker unavailable",
-                "info"
-            );
+  d.setUint32(
+    8,
+    0x11223344
+  );
 
-            resolve(true);
-            return;
-        }
+  if(
+    d.getUint32(8) !==
+    0x11223344
+  )
+    return false;
 
-        const source =
+  let caught=false;
 
-        "self.onmessage=function(e){" +
-        "var a=new Uint32Array(e.data);" +
-        "var ok=" +
-        "a[0]===0x11223344&&" +
-        "a[1]===0x55667788;" +
-        "self.postMessage(ok);" +
-        "};";
+  try {
 
-        const blob =
-            new Blob(
-                [source],
-                {
-                    type:
-                    "text/javascript"
-                }
-            );
+    d.getUint32(130);
 
-        const url =
-            URL.createObjectURL(
-                blob
-            );
+  } catch(e) {
 
-        const worker =
-            new Worker(url);
+    caught=true;
+  }
 
-        const buffer =
-            new ArrayBuffer(16);
+  return caught;
+}
 
-        const a =
-            new Uint32Array(buffer);
+/* -------------------------
+   Object/GC pressure
+-------------------------- */
 
-        a[0] =
-            0x11223344;
+function objectCase(iter) {
 
-        a[1] =
-            0x55667788;
+  let objects=[];
 
-        const timer =
-            setTimeout(
-                function() {
+  for(let i=0;i<2000;i++) {
 
-                    worker.terminate();
-
-                    URL.revokeObjectURL(
-                        url
-                    );
-
-                    resolve(false);
-
-                },
-                3000
-            );
-
-        worker.onmessage =
-            function(e) {
-
-                clearTimeout(timer);
-
-                worker.terminate();
-
-                URL.revokeObjectURL(
-                    url
-                );
-
-                resolve(
-                    e.data === true
-                );
-            };
-
-        worker.postMessage(
-            buffer
-        );
+    objects.push({
+      a:i,
+      b:iter,
+      c:"webkit-"+i,
+      d:[i,i+1,i+2]
     });
-}
+  }
 
-/* ===============================
-   Main PoC
-================================ */
+  for(let i=0;i<objects.length;i+=127) {
 
-async function runV2() {
-
-    clearLog();
-    reset();
-
-    log(
-        "PS5 WebKit PoC V2 starting...",
-        "info"
-    );
-
-    log(
-        "UA: " +
-        navigator.userAgent
-    );
-
-    log("");
-
-    log(
-        "WebAssembly: " +
-        (
-            typeof WebAssembly !==
-            "undefined"
-            ?
-            "available" :
-            "unavailable"
-        )
-    );
-
-    log(
-        "SharedArrayBuffer: " +
-        (
-            typeof SharedArrayBuffer !==
-            "undefined"
-            ?
-            "available" :
-            "unavailable"
-        )
-    );
-
-    log("");
-
-    const iterations = 500;
-
-    for (
-        let i = 0;
-        i < iterations;
-        i++
+    if(
+      objects[i].a !== i ||
+      objects[i].b !== iter
     ) {
 
-        test(
-            "ArrayBuffer integrity",
-            function() {
-                return bufferTest(i);
-            }
-        );
-
-        test(
-            "DataView bounds",
-            dataViewTest
-        );
-
-        test(
-            "TypedArray bounds",
-            boundsTest
-        );
-
-        if (
-            (i % 25) === 0
-        ) {
-
-            test(
-                "Allocation pressure",
-                allocationPressure
-            );
-        }
-
-        if (
-            (i % 50) === 0
-        ) {
-
-            const result =
-                await workerTest();
-
-            stats.tests++;
-
-            if (result) {
-
-                stats.pass++;
-
-            } else {
-
-                stats.fail++;
-
-                log(
-                    "[FAIL] Worker test",
-                    "fail"
-                );
-            }
-        }
-
-        if (
-            (i % 50) === 0
-        ) {
-
-            log(
-                "Iteration " +
-                i +
-                " / " +
-                iterations,
-                "info"
-            );
-
-            await new Promise(
-                function(resolve) {
-                    setTimeout(
-                        resolve,
-                        0
-                    );
-                }
-            );
-        }
+      result.anomalies++;
+      return false;
     }
+  }
 
-    const runtime =
-        performance.now() -
-        stats.start;
+  objects=null;
 
-    log("");
-    log(
-        "========== RESULT ==========",
-        "info"
-    );
-
-    log(
-        "Tests:     " +
-        stats.tests
-    );
-
-    log(
-        "Passed:    " +
-        stats.pass,
-        "ok"
-    );
-
-    log(
-        "Failed:    " +
-        stats.fail,
-        stats.fail ?
-        "fail" : "ok"
-    );
-
-    log(
-        "Anomalies: " +
-        stats.anomaly,
-        stats.anomaly ?
-        "fail" : "ok"
-    );
-
-    log(
-        "Runtime:   " +
-        runtime.toFixed(2) +
-        " ms"
-    );
-
-    if (
-        stats.fail === 0 &&
-        stats.anomaly === 0
-    ) {
-
-        log(
-            "[PASS] No unexpected " +
-            "behaviour detected.",
-            "ok"
-        );
-
-    } else {
-
-        log(
-            "[!] Reproduce the failing " +
-            "test before drawing conclusions.",
-            "fail"
-        );
-    }
-
-    log(
-        "============================",
-        "info"
-    );
+  return true;
 }
 
-/* ===============================
-   Separate memory test
-================================ */
+/* -------------------------
+   DOM lifecycle pressure
+-------------------------- */
 
-async function allocationTest() {
+function domCase(iter) {
 
-    log("");
-    log(
-        "Memory allocation test...",
-        "info"
+  const root=
+    document.createElement("div");
+
+  for(let i=0;i<250;i++) {
+
+    const e=
+      document.createElement("span");
+
+    e.textContent=
+      iter+":"+i;
+
+    e.setAttribute(
+      "data-test",
+      String(i)
     );
 
-    let blocks = [];
+    root.appendChild(e);
+  }
 
-    try {
+  document.body.appendChild(root);
 
-        for (
-            let i = 0;
-            i < 256;
-            i++
-        ) {
+  const count=
+    root.childNodes.length;
 
-            const b =
-                new ArrayBuffer(
-                    1024 * 1024
-                );
+  root.remove();
 
-            const v =
-                new Uint8Array(b);
+  return count===250;
+}
 
-            v[0] = i & 255;
+/* -------------------------
+   Dispatcher
+-------------------------- */
 
-            v[v.length - 1] =
-                (i ^ 255) & 255;
+function execute(which,i) {
 
-            blocks.push(b);
+  if(which==="typed")
+    return runTest(
+      "TypedArray",
+      ()=>typedCase(i)
+    );
 
-            if (
-                (i % 16) === 0
-            ) {
+  if(which==="view")
+    return runTest(
+      "DataView",
+      viewCase
+    );
 
-                log(
-                    "Allocated " +
-                    (i + 1) +
-                    " MB"
-                );
+  if(which==="objects")
+    return runTest(
+      "Object churn",
+      ()=>objectCase(i)
+    );
 
-                await new Promise(
-                    function(resolve) {
-                        setTimeout(
-                            resolve,
-                            0
-                        );
-                    }
-                );
-            }
-        }
+  if(which==="dom")
+    return runTest(
+      "DOM churn",
+      ()=>domCase(i)
+    );
 
-        log(
-            "[PASS] 256 MB allocation completed",
-            "ok"
-        );
+  return true;
+}
 
-    } catch(e) {
+/* -------------------------
+   Main runner
+-------------------------- */
 
-        log(
-            "[INFO] Allocation stopped: " +
-            e,
-            "info"
-        );
+async function start() {
+
+  clearLog();
+  reset();
+
+  previousCheckpoint();
+
+  const selected=
+    document.getElementById(
+      "case"
+    ).value;
+
+  const runs=
+    Number(
+      document.getElementById(
+        "runs"
+      ).value
+    );
+
+  log(
+    "PS5 WebKit V3 starting...",
+    "info"
+  );
+
+  log(
+    "UA: "+
+    navigator.userAgent
+  );
+
+  log(
+    "Selected: "+
+    selected
+  );
+
+  log(
+    "Iterations: "+
+    runs
+  );
+
+  log("");
+
+  const cases=
+    selected==="all"
+    ?
+    [
+      "typed",
+      "view",
+      "objects",
+      "dom"
+    ]
+    :
+    [selected];
+
+  for(let i=0;i<runs;i++) {
+
+    if(abort)
+      break;
+
+    result.last=i;
+
+    for(
+      let n=0;
+      n<cases.length;
+      n++
+    ) {
+
+      const name=cases[n];
+
+      checkpoint(
+        name,
+        i
+      );
+
+      execute(
+        name,
+        i
+      );
+
+      if(abort)
+        break;
     }
 
-    blocks = null;
+    /*
+      Let WebKit process pending UI,
+      GC and event-loop activity.
+    */
+
+    if((i%25)===0) {
+
+      log(
+        "Iteration "+
+        i+
+        " / "+
+        runs,
+        "info"
+      );
+
+      await new Promise(
+        resolve=>
+          setTimeout(resolve,0)
+      );
+    }
+  }
+
+  const elapsed=
+    performance.now()-
+    result.start;
+
+  log("");
+  log(
+    "========== V3 RESULT ==========",
+    "info"
+  );
+
+  log(
+    "Tests:      "+
+    result.tests
+  );
+
+  log(
+    "Passed:     "+
+    result.passed,
+    "ok"
+  );
+
+  log(
+    "Failed:     "+
+    result.failed,
+    result.failed ?
+      "bad":"ok"
+  );
+
+  log(
+    "Anomalies:  "+
+    result.anomalies,
+    result.anomalies ?
+      "bad":"ok"
+  );
+
+  log(
+    "Last run:   "+
+    result.last
+  );
+
+  log(
+    "Runtime:    "+
+    elapsed.toFixed(2)+
+    " ms"
+  );
+
+  if(
+    !abort &&
+    result.failed===0 &&
+    result.anomalies===0
+  ) {
+
+    log(
+      "[PASS] Stable run",
+      "ok"
+    );
+  }
+
+  log(
+    "===============================",
+    "info"
+  );
 }
 
 </script>
-
 </body>
 </html>
