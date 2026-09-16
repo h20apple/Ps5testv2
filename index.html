@@ -2,91 +2,86 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 13.60 V16 Same-Document Re-entry</title>
+<title>PS5 13.60 V17 SSV Callback Probe</title>
 
 <style>
-body {
+body{
     background:#101827;
     color:#eee;
     font:16px monospace;
     padding:18px;
 }
-button {
+button{
     font:16px monospace;
     padding:10px;
     margin:5px;
 }
-#log {
+#log{
     background:#17233a;
     padding:14px;
     margin-top:12px;
     white-space:pre-wrap;
 }
-.ok { color:#59ff7a; }
-.bad { color:#ff6868; }
-.warn { color:#ffd166; }
-.info { color:#63caff; }
+.ok{color:#59ff7a}
+.bad{color:#ff6868}
+.warn{color:#ffd166}
+.info{color:#63caff}
 
-#targets {
-    position:absolute;
-    left:-10000px;
-    top:-10000px;
+.spacer{
+    height:1800px;
 }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 13.60 — V16 Same-Document Re-entry</h2>
+<h2>PS5 13.60 — V17 SSV Callback Probe</h2>
 
-<button onclick="runV16()">RUN V16</button>
+<button onclick="runV17()">RUN V17</button>
 <button onclick="clearCP()">CLEAR CHECKPOINT</button>
 
 <div id="log"></div>
-<div id="targets"></div>
+
+<div class="spacer"></div>
+
+<a id="foo" href="#foo">
+    V17 fragment target
+</a>
 
 <script>
 "use strict";
 
-const KEY = "PS5_V16_CP";
+const KEY = "PS5_V17_CP";
 
 const box =
     document.getElementById("log");
 
-const targets =
-    document.getElementById("targets");
-
 let seq = 0;
 let events = [];
 
-function log(s, cls="") {
+function log(text, cls="") {
 
     const d =
         document.createElement("div");
 
-    d.textContent = s;
+    d.textContent = text;
     d.className = cls;
 
     box.appendChild(d);
-
-    window.scrollTo(
-        0,
-        document.body.scrollHeight
-    );
 }
 
-function checkpoint(phase) {
+function checkpoint(name) {
 
     seq++;
 
-    const record = {
-        n: seq,
-        phase: phase,
-        href: location.href,
-        time: performance.now()
+    const e = {
+        n:seq,
+        name:name,
+        href:location.href,
+        time:performance.now()
     };
 
-    events.push(record);
+    events.push(e);
 
     try {
 
@@ -94,20 +89,20 @@ function checkpoint(phase) {
             KEY,
             JSON.stringify({
                 state:"RUNNING",
-                last:record,
-                events:events.slice(-30)
+                last:e,
+                events:events.slice(-40)
             })
         );
 
-    } catch(e) {}
+    } catch(x) {}
 
     log(
-        seq + ": " + phase,
+        seq + ": " + name,
         "info"
     );
 }
 
-function finish() {
+function finished() {
 
     try {
 
@@ -119,7 +114,7 @@ function finish() {
             })
         );
 
-    } catch(e) {}
+    } catch(x) {}
 }
 
 function clearCP() {
@@ -139,44 +134,38 @@ function showPrevious() {
         const raw =
             localStorage.getItem(KEY);
 
-        if (!raw)
+        if(!raw)
             return;
 
         const cp =
             JSON.parse(raw);
 
-        if (cp.state !== "RUNNING")
+        if(cp.state !== "RUNNING")
             return;
 
         log(
-            "******************************",
+            "****************************",
             "bad"
         );
 
         log(
-            "PREVIOUS RUN DID NOT COMPLETE",
+            "PREVIOUS RUN INCOMPLETE",
             "bad"
         );
 
-        if (cp.last) {
+        if(cp.last) {
 
             log(
                 "LAST EVENT: " +
                 cp.last.n +
                 " / " +
-                cp.last.phase,
-                "bad"
-            );
-
-            log(
-                "URL: " +
-                cp.last.href,
+                cp.last.name,
                 "bad"
             );
         }
 
         log(
-            "******************************",
+            "****************************",
             "bad"
         );
 
@@ -186,12 +175,11 @@ function showPrevious() {
 function sleep(ms) {
 
     return new Promise(
-        resolve =>
-            setTimeout(resolve, ms)
+        r => setTimeout(r,ms)
     );
 }
 
-function waitForPop(timeout=5000) {
+function waitPop() {
 
     return new Promise(
         (resolve,reject) => {
@@ -199,41 +187,35 @@ function waitForPop(timeout=5000) {
             const timer =
                 setTimeout(() => {
 
-                    removeEventListener(
-                        "popstate",
-                        handler
-                    );
-
                     reject(
                         new Error(
                             "popstate timeout"
                         )
                     );
 
-                }, timeout);
-
-            function handler(e) {
-
-                clearTimeout(timer);
-
-                checkpoint(
-                    "POPSTATE state=" +
-                    String(e.state)
-                );
-
-                resolve(e);
-            }
+                },5000);
 
             addEventListener(
                 "popstate",
-                handler,
+                function handler(e) {
+
+                    clearTimeout(timer);
+
+                    checkpoint(
+                        "POPSTATE state=" +
+                        String(e.state)
+                    );
+
+                    resolve(e);
+
+                },
                 {once:true}
             );
         }
     );
 }
 
-async function runV16() {
+async function runV17() {
 
     box.innerHTML = "";
 
@@ -242,8 +224,11 @@ async function runV16() {
     seq = 0;
     events = [];
 
+    let blurCount = 0;
+    let replaceCount = 0;
+
     log(
-        "V16 START",
+        "V17 START",
         "info"
     );
 
@@ -256,7 +241,7 @@ async function runV16() {
     try {
 
         /*
-         * Clean baseline URL/state.
+         * Clean starting state.
          */
 
         checkpoint(
@@ -264,210 +249,196 @@ async function runV16() {
         );
 
         history.replaceState(
-            {v16:0},
+            "v17-base",
             "",
             location.pathname
         );
 
         /*
-         * Focusable elements give us observable
-         * JS callbacks around navigation.
+         * Create the element which will
+         * initially hold focus.
          */
 
         checkpoint(
-            "CREATE_TARGETS"
+            "CREATE_INPUT"
         );
 
-        targets.innerHTML = "";
-
-        const a =
+        const input =
             document.createElement("input");
 
-        const b =
-            document.createElement("input");
+        input.id =
+            "v17-input";
 
-        a.id = "v16-a";
-        b.id = "v16-b";
+        input.value =
+            "focused element";
 
-        targets.appendChild(a);
-        targets.appendChild(b);
-
-        a.addEventListener(
-            "focus",
-            () => checkpoint("A_FOCUS")
-        );
-
-        a.addEventListener(
-            "blur",
-            () => checkpoint("A_BLUR")
-        );
-
-        b.addEventListener(
-            "focus",
-            () => checkpoint("B_FOCUS")
-        );
-
-        b.addEventListener(
-            "blur",
-            () => checkpoint("B_BLUR")
+        document.body.insertBefore(
+            input,
+            document.body.firstChild
         );
 
         /*
-         * Observe hashchange separately from
-         * popstate.
+         * This is the callback we're testing.
+         *
+         * It intentionally performs only the
+         * History API operation documented in
+         * the historical trigger.
          */
 
-        function hashHandler() {
+        input.onblur = function() {
+
+            blurCount++;
 
             checkpoint(
-                "HASHCHANGE"
+                "BLUR_ENTER"
             );
-        }
 
-        addEventListener(
-            "hashchange",
-            hashHandler
-        );
+            try {
+
+                checkpoint(
+                    "BEFORE_REPLACE_FROM_BLUR"
+                );
+
+                history.replaceState(
+                    "v17-replaced",
+                    "",
+                    location.href
+                );
+
+                replaceCount++;
+
+                checkpoint(
+                    "AFTER_REPLACE_FROM_BLUR"
+                );
+
+            } catch(e) {
+
+                checkpoint(
+                    "REPLACE_EXCEPTION " +
+                    String(e)
+                );
+            }
+
+            checkpoint(
+                "BLUR_EXIT"
+            );
+        };
+
+        input.onfocus = function() {
+
+            checkpoint(
+                "INPUT_FOCUS"
+            );
+        };
 
         /*
-         * Establish same-document history.
+         * Establish the same-document history
+         * arrangement.
+         *
+         * First entry contains #foo.
+         * Second entry is the current state.
          */
 
         checkpoint(
-            "PUSH_STATE_1"
+            "PUSH_FRAGMENT_STATE"
         );
 
         history.pushState(
-            {v16:1},
+            "v17-state1",
             "",
-            location.pathname + "#v16-one"
+            location.pathname + "#foo"
         );
 
         checkpoint(
-            "PUSH_STATE_2"
+            "PUSH_CURRENT_STATE"
         );
 
         history.pushState(
-            {v16:2},
+            "v17-state2",
             "",
-            location.pathname + "#v16-two"
-        );
-
-        checkpoint(
-            "PUSH_STATE_3"
-        );
-
-        history.pushState(
-            {v16:3},
-            "",
-            location.pathname + "#v16-three"
+            location.pathname
         );
 
         /*
-         * Start with a focused element.
+         * Give input the focus before navigating
+         * back to the fragment.
          */
 
         checkpoint(
-            "BEFORE_A_FOCUS"
+            "BEFORE_INPUT_FOCUS"
         );
 
-        a.focus();
-
-        await sleep(0);
+        input.focus();
 
         checkpoint(
-            "AFTER_A_FOCUS"
+            "AFTER_INPUT_FOCUS"
         );
+
+        await sleep(100);
 
         /*
-         * FIRST SAME-DOCUMENT NAVIGATION
+         * history.back() should navigate to
+         * the #foo history entry.
+         *
+         * We're recording whether blur and
+         * replaceState occur before/after
+         * history.back() returns.
          */
 
-        const pop1 =
-            waitForPop();
+        const pop =
+            waitPop();
 
         checkpoint(
-            "BEFORE_BACK_1"
+            "BEFORE_HISTORY_BACK"
         );
 
         history.back();
 
         checkpoint(
-            "AFTER_BACK_1_RETURN"
+            "AFTER_HISTORY_BACK_RETURN"
         );
 
-        await pop1;
+        await pop;
 
         checkpoint(
-            "AFTER_POP_1"
+            "AFTER_POPSTATE"
         );
 
-        /*
-         * Force another observable focus
-         * transition between navigations.
-         */
+        await sleep(250);
 
         checkpoint(
-            "BEFORE_B_FOCUS"
+            "FINAL_CHECK"
         );
-
-        b.focus();
-
-        checkpoint(
-            "AFTER_B_FOCUS"
-        );
-
-        await sleep(0);
-
-        /*
-         * SECOND SAME-DOCUMENT NAVIGATION
-         */
-
-        const pop2 =
-            waitForPop();
-
-        checkpoint(
-            "BEFORE_BACK_2"
-        );
-
-        history.back();
-
-        checkpoint(
-            "AFTER_BACK_2_RETURN"
-        );
-
-        await pop2;
-
-        checkpoint(
-            "AFTER_POP_2"
-        );
-
-        await sleep(50);
-
-        checkpoint(
-            "FINAL_STATE_CHECK"
-        );
-
-        const finalState =
-            history.state;
 
         log("");
         log(
-            "FINAL history.state = " +
-            JSON.stringify(finalState)
+            "blur callbacks = " +
+            blurCount
         );
 
         log(
-            "FINAL hash = " +
+            "replaceState in blur = " +
+            replaceCount
+        );
+
+        log(
+            "final state = " +
+            String(history.state)
+        );
+
+        log(
+            "final hash = " +
             location.hash
         );
 
-        removeEventListener(
-            "hashchange",
-            hashHandler
-        );
+        /*
+         * Cleanup.
+         */
 
-        targets.innerHTML = "";
+        input.onblur = null;
+        input.onfocus = null;
+
+        input.remove();
 
         history.replaceState(
             null,
@@ -479,17 +450,27 @@ async function runV16() {
             "CLEANUP_COMPLETE"
         );
 
-        finish();
+        finished();
 
         log("");
         log(
-            "======= V16 RESULT =======",
+            "======= V17 RESULT =======",
             "info"
         );
 
         log(
             "STATUS: NORMAL",
             "ok"
+        );
+
+        log(
+            "BLUR: " +
+            blurCount
+        );
+
+        log(
+            "REPLACE IN BLUR: " +
+            replaceCount
         );
 
         log(
@@ -511,7 +492,7 @@ async function runV16() {
 
         log("");
         log(
-            "V16 EXCEPTION",
+            "V17 EXCEPTION",
             "bad"
         );
 
