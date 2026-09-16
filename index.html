@@ -1,47 +1,47 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 V10 FontFace Probe</title>
+<title>PS5 WebKit 13.60 V11 Targeted Regression</title>
 
 <style>
-body{
-  background:#101827;
-  color:#eee;
-  font:16px monospace;
-  padding:18px
+body {
+    background:#101827;
+    color:#eee;
+    font:16px monospace;
+    padding:18px;
 }
-button,select{
-  font:16px monospace;
-  padding:9px;
-  margin:4px
+button,select {
+    font:16px monospace;
+    padding:9px;
+    margin:4px;
 }
-#log{
-  background:#17233a;
-  padding:14px;
-  margin-top:10px;
-  white-space:pre-wrap
+#log {
+    background:#17233a;
+    padding:14px;
+    margin-top:10px;
+    white-space:pre-wrap;
 }
-.ok{color:#59ff7a}
-.bad{color:#ff6868}
-.warn{color:#ffd166}
-.info{color:#63caff}
-#sandbox{
-  position:absolute;
-  left:-20000px;
-  top:0
+.ok { color:#59ff7a; }
+.bad { color:#ff6868; }
+.warn { color:#ffd166; }
+.info { color:#63caff; }
+#sandbox {
+    position:absolute;
+    left:-20000px;
+    top:0;
 }
 </style>
 
-<h2>PS5 WebKit 13.60 — V10 FontFace Probe</h2>
+<h2>PS5 WebKit 13.60 — V11 Targeted Regression</h2>
 
 <select id="runs">
-<option value="10">10 runs</option>
-<option value="100" selected>100 runs</option>
-<option value="500">500 runs</option>
+    <option value="10">10 runs</option>
+    <option value="100" selected>100 runs</option>
+    <option value="500">500 runs</option>
 </select>
 
-<button onclick="start()">RUN</button>
-<button onclick="stopRun()">STOP</button>
+<button onclick="runAll()">RUN ALL</button>
 <button onclick="replay()">REPLAY CHECKPOINT</button>
+<button onclick="stopRun()">STOP</button>
 <button onclick="clearLog()">CLEAR</button>
 
 <div id="sandbox"></div>
@@ -50,732 +50,876 @@ button,select{
 <script>
 "use strict";
 
-const output=document.getElementById("log");
-const sandbox=document.getElementById("sandbox");
+const logElement = document.getElementById("log");
+const sandbox = document.getElementById("sandbox");
 
-let stopping=false;
+let stopping = false;
 
-let stats={
-  pass:0,
-  fail:0,
-  exceptions:0,
-  unsupported:0
-};
-
-function log(s,c=""){
-  const e=document.createElement("div");
-  e.textContent=s;
-  e.className=c;
-  output.appendChild(e);
-  window.scrollTo(0,document.body.scrollHeight);
-}
-
-function clearLog(){
-  output.innerHTML="";
-}
-
-function stopRun(){
-  stopping=true;
-  log("STOP REQUESTED","warn");
-}
-
-/* -----------------------------
-   Persistent checkpoint
------------------------------- */
-
-function checkpoint(test,i,phase,state="RUNNING"){
-
-  try{
-
-    localStorage.setItem(
-      "v10-checkpoint",
-      JSON.stringify({
-        test:test,
-        iteration:i,
-        phase:phase,
-        state:state,
-        time:Date.now()
-      })
-    );
-
-  }catch(e){}
-}
-
-function readCheckpoint(){
-
-  try{
-
-    const x=
-      localStorage.getItem(
-        "v10-checkpoint"
-      );
-
-    return x ?
-      JSON.parse(x) :
-      null;
-
-  }catch(e){
-
-    return null;
-  }
-}
-
-function previous(){
-
-  const c=readCheckpoint();
-
-  if(c && c.state==="RUNNING"){
-
-    log(
-      "================================",
-      "bad"
-    );
-
-    log(
-      "PREVIOUS EXECUTION INCOMPLETE",
-      "bad"
-    );
-
-    log("TEST: "+c.test,"bad");
-    log("ITERATION: "+c.iteration,"bad");
-    log("PHASE: "+c.phase,"bad");
-
-    log(
-      "================================",
-      "bad"
-    );
-  }
-}
-
-/* -----------------------------
-   Capability report
------------------------------- */
-
-function capabilities(){
-
-  log("CAPABILITY CHECK","info");
-
-  log(
-    "FontFace: "+
-    (typeof FontFace)
-  );
-
-  log(
-    "document.fonts: "+
-    (document.fonts ?
-      "available":"missing")
-  );
-
-  if(document.fonts){
-
-    log(
-      "FontFaceSet.add: "+
-      typeof document.fonts.add
-    );
-
-    log(
-      "FontFaceSet.delete: "+
-      typeof document.fonts.delete
-    );
-
-    log(
-      "FontFaceSet.check: "+
-      typeof document.fonts.check
-    );
-
-    log(
-      "FontFaceSet.load: "+
-      typeof document.fonts.load
-    );
-  }
-
-  log("");
-}
-
-/* =============================
-   TEST 1
-   FontFace construction
-============================= */
-
-async function constructFace(i){
-
-  checkpoint(
-    "constructFace",
-    i,
-    "construct"
-  );
-
-  const name=
-    "V10Construct"+i;
-
-  const f=
-    new FontFace(
-      name,
-      "local(Arial)"
-    );
-
-  checkpoint(
-    "constructFace",
-    i,
-    "properties"
-  );
-
-  f.style="normal";
-  f.weight="400";
-  f.stretch="normal";
-
-  return f.family===name;
-}
-
-/* =============================
-   TEST 2
-   Add / remove lifecycle
-============================= */
-
-async function addRemove(i){
-
-  checkpoint(
-    "addRemove",
-    i,
-    "construct"
-  );
-
-  const name=
-    "V10AddRemove"+i;
-
-  const f=
-    new FontFace(
-      name,
-      "local(Arial)"
-    );
-
-  checkpoint(
-    "addRemove",
-    i,
-    "add"
-  );
-
-  document.fonts.add(f);
-
-  checkpoint(
-    "addRemove",
-    i,
-    "check"
-  );
-
-  document.fonts.check(
-    "16px "+name
-  );
-
-  checkpoint(
-    "addRemove",
-    i,
-    "delete"
-  );
-
-  document.fonts.delete(f);
-
-  return true;
-}
-
-/* =============================
-   TEST 3
-   FontFace property churn
-============================= */
-
-async function propertyChurn(i){
-
-  checkpoint(
-    "propertyChurn",
-    i,
-    "construct"
-  );
-
-  const f=
-    new FontFace(
-      "V10Properties"+i,
-      "local(Arial)"
-    );
-
-  checkpoint(
-    "propertyChurn",
-    i,
-    "properties"
-  );
-
-  for(let n=0;n<50;n++){
-
-    f.style=
-      (n&1) ?
-      "italic":"normal";
-
-    f.weight=
-      (n&1) ?
-      "700":"400";
-
-    f.stretch=
-      (n&1) ?
-      "condensed":"normal";
-  }
-
-  return true;
-}
-
-/* =============================
-   TEST 4
-   CSS rule lifecycle
-============================= */
-
-async function cssRuleLifecycle(i){
-
-  checkpoint(
-    "cssRuleLifecycle",
-    i,
-    "style-create"
-  );
-
-  const style=
-    document.createElement("style");
-
-  const name=
-    "V10Rule"+i;
-
-  style.textContent=
-    "@font-face{"+
-    "font-family:'"+name+"';"+
-    "src:local(Arial);"+
-    "}";
-
-  checkpoint(
-    "cssRuleLifecycle",
-    i,
-    "style-append"
-  );
-
-  document.head.appendChild(style);
-
-  const element=
-    document.createElement("span");
-
-  element.textContent=
-    "FontFace regression "+i;
-
-  element.style.fontFamily=
-    "'"+name+"'";
-
-  sandbox.appendChild(element);
-
-  checkpoint(
-    "cssRuleLifecycle",
-    i,
-    "layout"
-  );
-
-  void element.offsetWidth;
-
-  checkpoint(
-    "cssRuleLifecycle",
-    i,
-    "remove-style"
-  );
-
-  style.remove();
-
-  checkpoint(
-    "cssRuleLifecycle",
-    i,
-    "layout-after-remove"
-  );
-
-  void element.offsetWidth;
-
-  element.remove();
-
-  return true;
-}
-
-/* =============================
-   TEST 5
-   Document/font lifetime
-============================= */
-
-async function frameFontLifetime(i){
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "frame-create"
-  );
-
-  const frame=
-    document.createElement("iframe");
-
-  sandbox.appendChild(frame);
-
-  await new Promise(
-    r=>setTimeout(r,0)
-  );
-
-  const doc=
-    frame.contentDocument;
-
-  if(!doc)
-    return false;
-
-  if(typeof doc.defaultView.FontFace
-     !=="function"){
-
-    frame.remove();
-    return "unsupported";
-  }
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "face-create"
-  );
-
-  const Face=
-    doc.defaultView.FontFace;
-
-  const face=
-    new Face(
-      "V10Frame"+i,
-      "local(Arial)"
-    );
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "font-add"
-  );
-
-  doc.fonts.add(face);
-
-  const element=
-    doc.createElement("span");
-
-  element.textContent="frame font";
-  element.style.fontFamily=
-    "V10Frame"+i;
-
-  doc.body.appendChild(element);
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "layout"
-  );
-
-  void element.offsetWidth;
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "remove-frame"
-  );
-
-  frame.remove();
-
-  checkpoint(
-    "frameFontLifetime",
-    i,
-    "retained-face"
-  );
-
-  /*
-    Harmless inspection of the retained
-    JS wrapper after document teardown.
-  */
-
-  const family=face.family;
-
-  return typeof family==="string";
-}
-
-/* =============================
-   TEST TABLE
-============================= */
-
-const tests=[
-  ["constructFace",constructFace],
-  ["addRemove",addRemove],
-  ["propertyChurn",propertyChurn],
-  ["cssRuleLifecycle",cssRuleLifecycle],
-  ["frameFontLifetime",frameFontLifetime]
-];
-
-async function execute(name,fn,i){
-
-  checkpoint(name,i,"BEGIN");
-
-  try{
-
-    const result=
-      await fn(i);
-
-    if(result===true){
-
-      stats.pass++;
-
-    }else if(result==="unsupported"){
-
-      stats.unsupported++;
-
-      log(
-        "[UNSUPPORTED] "+
-        name+" #"+i,
-        "warn"
-      );
-
-    }else{
-
-      stats.fail++;
-
-      log(
-        "[FAIL] "+
-        name+" #"+i,
-        "bad"
-      );
-
-      stopping=true;
-    }
-
-  }catch(e){
-
-    stats.exceptions++;
-
-    log(
-      "[EXCEPTION] "+
-      name+" #"+i+
-      " :: "+e,
-      "bad"
-    );
-
-    stopping=true;
-  }
-
-  checkpoint(
-    name,
-    i,
-    "COMPLETE",
-    "COMPLETE"
-  );
-}
-
-async function start(){
-
-  clearLog();
-  previous();
-
-  stopping=false;
-
-  stats={
+let stats = {
     pass:0,
     fail:0,
     exceptions:0,
-    unsupported:0
-  };
+    timeout:0
+};
 
-  capabilities();
+function log(text, cls="") {
+    const d = document.createElement("div");
+    d.textContent = text;
+    d.className = cls;
+    logElement.appendChild(d);
+    window.scrollTo(0, document.body.scrollHeight);
+}
 
-  if(typeof FontFace!=="function"){
+function clearLog() {
+    logElement.innerHTML = "";
+}
 
-    log(
-      "FontFace unavailable — stopping.",
-      "warn"
+function stopRun() {
+    stopping = true;
+    log("STOP REQUESTED", "warn");
+}
+
+/* =========================================
+   CHECKPOINT
+
+   If WebContent dies in the middle of a
+   testcase, this should remain RUNNING.
+========================================= */
+
+function checkpoint(test, iteration, phase, state="RUNNING") {
+    try {
+        localStorage.setItem(
+            "v11-checkpoint",
+            JSON.stringify({
+                test,
+                iteration,
+                phase,
+                state,
+                time:Date.now()
+            })
+        );
+    } catch(e) {}
+}
+
+function getCheckpoint() {
+    try {
+        const x = localStorage.getItem("v11-checkpoint");
+        return x ? JSON.parse(x) : null;
+    } catch(e) {
+        return null;
+    }
+}
+
+function showPreviousCrashCandidate() {
+
+    const c = getCheckpoint();
+
+    if (!c || c.state !== "RUNNING")
+        return;
+
+    log("================================", "bad");
+    log("PREVIOUS EXECUTION INCOMPLETE", "bad");
+    log("TEST: " + c.test, "bad");
+    log("ITERATION: " + c.iteration, "bad");
+    log("PHASE: " + c.phase, "bad");
+    log("================================", "bad");
+}
+
+/* =========================================
+   TEST 1
+
+   Based on WebKit:
+   animation-start-event-destroy-renderer.html
+
+   Removes/hides renderers from inside
+   animation-start callbacks.
+========================================= */
+
+function animationDestroy(i) {
+
+    return new Promise((resolve, reject) => {
+
+        checkpoint(
+            "animationDestroy",
+            i,
+            "create"
+        );
+
+        const style =
+            document.createElement("style");
+
+        const animationName =
+            "v11move" + i;
+
+        style.textContent =
+            "@-webkit-keyframes " + animationName + " {" +
+            "from { left:0px; }" +
+            "to { left:20px; }" +
+            "}";
+
+        document.head.appendChild(style);
+
+        const container =
+            document.createElement("div");
+
+        const a =
+            document.createElement("div");
+
+        const b =
+            document.createElement("div");
+
+        a.style.position = "relative";
+        b.style.position = "relative";
+
+        container.appendChild(a);
+        container.appendChild(b);
+
+        sandbox.appendChild(container);
+
+        let events = 0;
+        let finished = false;
+
+        function cleanup(result) {
+
+            if (finished)
+                return;
+
+            finished = true;
+
+            try { container.remove(); } catch(e) {}
+            try { style.remove(); } catch(e) {}
+
+            resolve(result);
+        }
+
+        a.addEventListener(
+            "webkitAnimationStart",
+            function() {
+
+                checkpoint(
+                    "animationDestroy",
+                    i,
+                    "remove-renderer"
+                );
+
+                a.remove();
+
+                events++;
+
+                if (events === 2)
+                    cleanup(true);
+            }
+        );
+
+        b.addEventListener(
+            "webkitAnimationStart",
+            function() {
+
+                checkpoint(
+                    "animationDestroy",
+                    i,
+                    "hide-renderer"
+                );
+
+                b.style.display = "none";
+
+                events++;
+
+                if (events === 2)
+                    cleanup(true);
+            }
+        );
+
+        checkpoint(
+            "animationDestroy",
+            i,
+            "start-animation"
+        );
+
+        a.style.webkitAnimation =
+            animationName + " 0.01s linear";
+
+        b.style.webkitAnimation =
+            animationName + " 0.01s linear";
+
+        setTimeout(() => {
+
+            if (!finished) {
+                /*
+                 Event unsupported/not delivered.
+                 This is not treated as a crash.
+                */
+                cleanup("timeout");
+            }
+
+        }, 500);
+    });
+}
+
+/* =========================================
+   TEST 2
+
+   Live Range while its contents and
+   surrounding DOM are being modified.
+========================================= */
+
+async function rangeMutation(i) {
+
+    checkpoint(
+        "rangeMutation",
+        i,
+        "create-tree"
     );
 
-    return;
-  }
+    const outer =
+        document.createElement("div");
 
-  const runs=
-    Number(
-      document.getElementById(
-        "runs"
-      ).value
+    const a =
+        document.createElement("span");
+
+    const b =
+        document.createElement("span");
+
+    const c =
+        document.createElement("span");
+
+    a.textContent = "AAAA";
+    b.textContent = "BBBB";
+    c.textContent = "CCCC";
+
+    outer.appendChild(a);
+    outer.appendChild(b);
+    outer.appendChild(c);
+
+    sandbox.appendChild(outer);
+
+    const range =
+        document.createRange();
+
+    checkpoint(
+        "rangeMutation",
+        i,
+        "set-range"
     );
 
-  log(
-    "V10 FONTFACE REGRESSION PROBE",
-    "info"
-  );
+    range.setStart(a.firstChild, 1);
+    range.setEnd(c.firstChild, 3);
 
-  log(
-    "UA: "+navigator.userAgent
-  );
-
-  log(
-    "Runs/test: "+runs
-  );
-
-  log("");
-
-  const begin=
-    performance.now();
-
-  for(const [name,fn] of tests){
-
-    if(stopping)
-      break;
-
-    log(
-      ">>> "+name,
-      "info"
+    checkpoint(
+        "rangeMutation",
+        i,
+        "extract"
     );
 
-    for(let i=0;i<runs;i++){
+    const fragment =
+        range.extractContents();
 
-      if(stopping)
-        break;
+    checkpoint(
+        "rangeMutation",
+        i,
+        "mutate-original"
+    );
 
-      await execute(
+    outer.textContent = "replacement";
+
+    checkpoint(
+        "rangeMutation",
+        i,
+        "inspect-fragment"
+    );
+
+    const text =
+        fragment.textContent;
+
+    checkpoint(
+        "rangeMutation",
+        i,
+        "destroy"
+    );
+
+    outer.remove();
+
+    return typeof text === "string";
+}
+
+/* =========================================
+   TEST 3
+
+   Range survives removal of the tree that
+   originally contained its endpoints.
+========================================= */
+
+async function detachedRange(i) {
+
+    checkpoint(
+        "detachedRange",
+        i,
+        "create"
+    );
+
+    const host =
+        document.createElement("div");
+
+    const text =
+        document.createTextNode(
+            "0123456789"
+        );
+
+    host.appendChild(text);
+    sandbox.appendChild(host);
+
+    const range =
+        document.createRange();
+
+    range.setStart(text, 2);
+    range.setEnd(text, 8);
+
+    checkpoint(
+        "detachedRange",
+        i,
+        "detach-tree"
+    );
+
+    host.remove();
+
+    checkpoint(
+        "detachedRange",
+        i,
+        "inspect-range"
+    );
+
+    const result =
+        range.toString();
+
+    checkpoint(
+        "detachedRange",
+        i,
+        "mutate-detached"
+    );
+
+    text.data =
+        "abcdefghij";
+
+    const result2 =
+        range.toString();
+
+    return (
+        typeof result === "string" &&
+        typeof result2 === "string"
+    );
+}
+
+/* =========================================
+   TEST 4
+
+   Replace an iframe document while retaining
+   wrappers belonging to the old document.
+========================================= */
+
+async function documentReplacement(i) {
+
+    checkpoint(
+        "documentReplacement",
+        i,
+        "create-frame"
+    );
+
+    const frame =
+        document.createElement("iframe");
+
+    sandbox.appendChild(frame);
+
+    await new Promise(
+        r => setTimeout(r,0)
+    );
+
+    let doc =
+        frame.contentDocument;
+
+    if (!doc) {
+        frame.remove();
+        return false;
+    }
+
+    const old =
+        doc.createElement("div");
+
+    old.textContent =
+        "old document " + i;
+
+    doc.body.appendChild(old);
+
+    checkpoint(
+        "documentReplacement",
+        i,
+        "replace-document"
+    );
+
+    doc.open();
+
+    doc.write(
+        "<!doctype html>" +
+        "<body>" +
+        "<div>new document</div>" +
+        "</body>"
+    );
+
+    doc.close();
+
+    checkpoint(
+        "documentReplacement",
+        i,
+        "old-wrapper"
+    );
+
+    old.textContent =
+        "retained wrapper " + i;
+
+    const value =
+        old.textContent;
+
+    checkpoint(
+        "documentReplacement",
+        i,
+        "destroy-frame"
+    );
+
+    frame.remove();
+
+    return value.length > 0;
+}
+
+/* =========================================
+   TEST 5
+
+   Retain DOM wrappers after iframe teardown.
+========================================= */
+
+async function frameTeardown(i) {
+
+    checkpoint(
+        "frameTeardown",
+        i,
+        "create"
+    );
+
+    const frame =
+        document.createElement("iframe");
+
+    sandbox.appendChild(frame);
+
+    await new Promise(
+        r => setTimeout(r,0)
+    );
+
+    const doc =
+        frame.contentDocument;
+
+    if (!doc) {
+        frame.remove();
+        return false;
+    }
+
+    const outer =
+        doc.createElement("div");
+
+    const inner =
+        doc.createElement("span");
+
+    inner.textContent =
+        "retained " + i;
+
+    outer.appendChild(inner);
+    doc.body.appendChild(outer);
+
+    checkpoint(
+        "frameTeardown",
+        i,
+        "remove-frame"
+    );
+
+    frame.remove();
+
+    checkpoint(
+        "frameTeardown",
+        i,
+        "mutate-retained"
+    );
+
+    inner.textContent =
+        "after teardown " + i;
+
+    outer.appendChild(
+        doc.createTextNode("x")
+    );
+
+    return (
+        inner.textContent ===
+        "after teardown " + i
+    );
+}
+
+/* =========================================
+   TEST 6
+
+   Event callback destroys its own DOM tree.
+========================================= */
+
+async function eventDestroy(i) {
+
+    checkpoint(
+        "eventDestroy",
+        i,
+        "create"
+    );
+
+    const outer =
+        document.createElement("div");
+
+    const middle =
+        document.createElement("div");
+
+    const target =
+        document.createElement("button");
+
+    target.textContent = "x";
+
+    middle.appendChild(target);
+    outer.appendChild(middle);
+    sandbox.appendChild(outer);
+
+    let called = false;
+
+    target.addEventListener(
+        "v11event",
+        function() {
+
+            checkpoint(
+                "eventDestroy",
+                i,
+                "callback-remove"
+            );
+
+            outer.remove();
+
+            checkpoint(
+                "eventDestroy",
+                i,
+                "callback-mutate"
+            );
+
+            middle.textContent =
+                "detached";
+
+            called = true;
+        }
+    );
+
+    checkpoint(
+        "eventDestroy",
+        i,
+        "dispatch"
+    );
+
+    target.dispatchEvent(
+        new Event(
+            "v11event",
+            { bubbles:true }
+        )
+    );
+
+    return called;
+}
+
+/* ========================================= */
+
+const tests = [
+    ["animationDestroy", animationDestroy],
+    ["rangeMutation", rangeMutation],
+    ["detachedRange", detachedRange],
+    ["documentReplacement", documentReplacement],
+    ["frameTeardown", frameTeardown],
+    ["eventDestroy", eventDestroy]
+];
+
+async function execute(name, fn, i) {
+
+    checkpoint(
         name,
-        fn,
-        i
-      );
+        i,
+        "BEGIN"
+    );
 
-      if(i%10===0){
+    try {
+
+        const result =
+            await fn(i);
+
+        if (result === true) {
+
+            stats.pass++;
+
+        } else if (result === "timeout") {
+
+            stats.timeout++;
+
+            log(
+                "[TIMEOUT] " +
+                name + " #" + i,
+                "warn"
+            );
+
+        } else {
+
+            stats.fail++;
+
+            log(
+                "[FAIL] " +
+                name + " #" + i,
+                "bad"
+            );
+
+            stopping = true;
+        }
+
+    } catch(e) {
+
+        stats.exceptions++;
 
         log(
-          name+" "+
-          i+"/"+runs
+            "[EXCEPTION] " +
+            name + " #" + i +
+            " :: " + e,
+            "bad"
+        );
+
+        stopping = true;
+    }
+
+    checkpoint(
+        name,
+        i,
+        "COMPLETE",
+        "COMPLETE"
+    );
+}
+
+/* ========================================= */
+
+async function runAll() {
+
+    clearLog();
+    showPreviousCrashCandidate();
+
+    stopping = false;
+
+    stats = {
+        pass:0,
+        fail:0,
+        exceptions:0,
+        timeout:0
+    };
+
+    const runs =
+        Number(
+            document.getElementById(
+                "runs"
+            ).value
+        );
+
+    log(
+        "V11 TARGETED REGRESSION",
+        "info"
+    );
+
+    log(
+        "UA: " +
+        navigator.userAgent
+    );
+
+    log(
+        "Runs/test: " + runs
+    );
+
+    log("");
+
+    const start =
+        performance.now();
+
+    for (const [name,fn] of tests) {
+
+        if (stopping)
+            break;
+
+        log(
+            ">>> " + name,
+            "info"
+        );
+
+        for (
+            let i=0;
+            i<runs && !stopping;
+            i++
+        ) {
+
+            await execute(
+                name,
+                fn,
+                i
+            );
+
+            if (i % 10 === 0) {
+
+                log(
+                    name +
+                    " " +
+                    i +
+                    "/" +
+                    runs
+                );
+
+                await new Promise(
+                    r => setTimeout(r,0)
+                );
+            }
+        }
+    }
+
+    const elapsed =
+        performance.now() - start;
+
+    log("");
+    log(
+        "======= V11 RESULT =======",
+        "info"
+    );
+
+    log(
+        "PASS:       " +
+        stats.pass,
+        "ok"
+    );
+
+    log(
+        "FAIL:       " +
+        stats.fail,
+        stats.fail ? "bad":"ok"
+    );
+
+    log(
+        "EXCEPTIONS: " +
+        stats.exceptions,
+        stats.exceptions ?
+            "bad":"ok"
+    );
+
+    log(
+        "TIMEOUT:    " +
+        stats.timeout,
+        stats.timeout ?
+            "warn":"ok"
+    );
+
+    log(
+        "RUNTIME:    " +
+        elapsed.toFixed(0) +
+        " ms"
+    );
+
+    log(
+        "==========================",
+        "info"
+    );
+}
+
+/* =========================================
+   REPLAY
+
+   Replays only the testcase associated
+   with the persistent checkpoint.
+========================================= */
+
+async function replay() {
+
+    clearLog();
+
+    const c =
+        getCheckpoint();
+
+    if (!c) {
+
+        log(
+            "No checkpoint available.",
+            "warn"
+        );
+
+        return;
+    }
+
+    const entry =
+        tests.find(
+            x => x[0] === c.test
+        );
+
+    if (!entry) {
+
+        log(
+            "Checkpoint test unavailable.",
+            "bad"
+        );
+
+        return;
+    }
+
+    log(
+        "REPLAY CHECKPOINT",
+        "warn"
+    );
+
+    log(
+        "TEST: " +
+        c.test
+    );
+
+    log(
+        "ITERATION: " +
+        c.iteration
+    );
+
+    log(
+        "LAST PHASE: " +
+        c.phase
+    );
+
+    stopping = false;
+
+    for (
+        let i=0;
+        i<=c.iteration &&
+        !stopping;
+        i++
+    ) {
+
+        await execute(
+            entry[0],
+            entry[1],
+            i
         );
 
         await new Promise(
-          r=>setTimeout(r,0)
+            r => setTimeout(r,0)
         );
-      }
     }
-  }
 
-  const elapsed=
-    performance.now()-begin;
+    if (!stopping) {
 
-  log("");
-
-  log(
-    "======= V10 RESULT =======",
-    "info"
-  );
-
-  log(
-    "PASS:        "+
-    stats.pass,
-    "ok"
-  );
-
-  log(
-    "FAIL:        "+
-    stats.fail,
-    stats.fail ?
-      "bad":"ok"
-  );
-
-  log(
-    "EXCEPTIONS:  "+
-    stats.exceptions,
-    stats.exceptions ?
-      "bad":"ok"
-  );
-
-  log(
-    "UNSUPPORTED: "+
-    stats.unsupported,
-    stats.unsupported ?
-      "warn":"ok"
-  );
-
-  log(
-    "RUNTIME:     "+
-    elapsed.toFixed(0)+
-    " ms"
-  );
-
-  log(
-    "==========================",
-    "info"
-  );
+        log(
+            "Replay completed normally.",
+            "ok"
+        );
+    }
 }
 
-async function replay(){
-
-  clearLog();
-
-  const c=
-    readCheckpoint();
-
-  if(!c){
-
-    log(
-      "No checkpoint available.",
-      "warn"
-    );
-
-    return;
-  }
-
-  const entry=
-    tests.find(
-      x=>x[0]===c.test
-    );
-
-  if(!entry){
-
-    log(
-      "Checkpoint testcase unavailable.",
-      "bad"
-    );
-
-    return;
-  }
-
-  log(
-    "REPLAYING CHECKPOINT",
-    "warn"
-  );
-
-  log(
-    "Test: "+c.test
-  );
-
-  log(
-    "Iteration: "+
-    c.iteration
-  );
-
-  log(
-    "Last phase: "+
-    c.phase
-  );
-
-  stopping=false;
-
-  for(let i=0;i<=c.iteration;i++){
-
-    if(stopping)
-      break;
-
-    await execute(
-      entry[0],
-      entry[1],
-      i
-    );
-
-    await new Promise(
-      r=>setTimeout(r,0)
-    );
-  }
-
-  if(!stopping){
-
-    log(
-      "Replay completed normally.",
-      "ok"
-    );
-  }
-}
-
-previous();
+showPreviousCrashCandidate();
 
 </script>
