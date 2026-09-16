@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V29 StructuredClone / Transfer Lifetime Probe</title>
+<title>PS5 13.60 - V30 MediaSource Lifecycle Probe</title>
 
 <style>
 body {
@@ -22,12 +22,19 @@ pre {
     white-space:pre-wrap;
     word-break:break-word;
 }
+video {
+    position:absolute;
+    left:-10000px;
+    top:-10000px;
+    width:1px;
+    height:1px;
+}
 </style>
 
-<h2>PS5 13.60 — V29</h2>
-<div>StructuredClone / transferable lifetime probe</div>
+<h2>PS5 13.60 — V30</h2>
+<div>MediaSource lifecycle / callback teardown probe</div>
 
-<p><button id="run">RUN V29</button></p>
+<p><button id="run">RUN V30</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -42,6 +49,7 @@ const runButton = document.querySelector("#run");
 let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
+let unsupported = 0;
 
 function log(s) {
     output.textContent += s + "\n";
@@ -51,7 +59,7 @@ function log(s) {
 function cp(stage) {
     try {
         localStorage.setItem(
-            "PS5_V29_CHECKPOINT",
+            "PS5_V30_CHECKPOINT",
             stage
         );
     } catch (_) {}
@@ -66,798 +74,106 @@ function good(name) {
 
 function bad(name, reason) {
     anomalies++;
-    log(
-        "[ANOMALY] " +
-        name +
-        " :: " +
-        reason
-    );
+    log("[ANOMALY] " + name + " :: " + reason);
 }
 
 function caught(name, e) {
     exceptions++;
-    log(
-        "[EXCEPTION] " +
-        name +
-        " :: " +
-        e
-    );
+    log("[EXCEPTION] " + name + " :: " + e);
+}
+
+function skip(name, why) {
+    unsupported++;
+    log("[UNSUPPORTED] " + name + " :: " + why);
 }
 
 function sleep(ms) {
-    return new Promise(
-        resolve => setTimeout(resolve, ms)
-    );
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function makeBuffer(size) {
-
-    const buffer =
-        new ArrayBuffer(size);
-
-    const view =
-        new Uint8Array(buffer);
-
-    for (
-        let i = 0;
-        i < view.length;
-        i++
-    ) {
-        view[i] =
-            (i * 17 + 23) & 255;
+function state(ms) {
+    try {
+        return ms.readyState;
+    } catch (e) {
+        return "THREW:" + e.name;
     }
-
-    return {
-        buffer,
-        view
-    };
 }
 
-function checksum(view) {
+function makeVideo() {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "none";
+    document.body.appendChild(video);
+    return video;
+}
 
-    let n = 0;
+function cleanup(video, url) {
+    try {
+        if (video) {
+            video.removeAttribute("src");
+            video.load();
+            video.remove();
+        }
+    } catch (_) {}
 
-    for (
-        let i = 0;
-        i < view.length;
-        i += 97
-    ) {
-        n =
-            (n + view[i]) >>> 0;
-    }
-
-    return n;
+    try {
+        if (url)
+            URL.revokeObjectURL(url);
+    } catch (_) {}
 }
 
 
 /*
- * A
- *
- * Basic structuredClone transfer.
- *
- * The original ArrayBuffer should become
- * detached after successful transfer.
+ * A — Basic attach / detach.
  */
 
 async function testA() {
 
-    const name =
-        "A_BASIC_TRANSFER";
+    const name = "A_BASIC_ATTACH";
 
     cp(name + ":CREATE");
 
-    try {
-
-        const x =
-            makeBuffer(65536);
-
-        const expected =
-            checksum(x.view);
-
-        cp(name + ":BEFORE_CLONE");
-
-        const clone =
-            structuredClone(
-                x.buffer,
-                {
-                    transfer:[
-                        x.buffer
-                    ]
-                }
-            );
-
-        cp(name + ":AFTER_CLONE");
-
-        log(
-            "[A] original byteLength=" +
-            x.buffer.byteLength
-        );
-
-        log(
-            "[A] clone byteLength=" +
-            clone.byteLength
-        );
-
-        const cloneView =
-            new Uint8Array(clone);
-
-        const actual =
-            checksum(cloneView);
-
-        log(
-            "[A] expected checksum=" +
-            expected
-        );
-
-        log(
-            "[A] actual checksum=" +
-            actual
-        );
-
-        if (
-            x.buffer.byteLength !== 0
-        ) {
-            bad(
-                name,
-                "source buffer not detached"
-            );
-        }
-
-        if (
-            clone.byteLength !== 65536
-        ) {
-            bad(
-                name,
-                "unexpected clone size"
-            );
-        }
-
-        if (
-            expected !== actual
-        ) {
-            bad(
-                name,
-                "clone data mismatch"
-            );
-        }
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-
-        caught(name, e);
-    }
-}
-
-
-/*
- * B
- *
- * Retain a typed-array wrapper while its
- * underlying buffer is transferred.
- */
-
-async function testB() {
-
-    const name =
-        "B_RETAINED_VIEW";
-
-    cp(name + ":CREATE");
+    let video = null;
+    let url = null;
 
     try {
 
-        const x =
-            makeBuffer(32768);
+        const ms = new MediaSource();
 
-        const retained =
-            x.view;
+        video = makeVideo();
 
-        cp(name + ":TRANSFER");
+        url = URL.createObjectURL(ms);
 
-        const clone =
-            structuredClone(
-                x.buffer,
-                {
-                    transfer:[
-                        x.buffer
-                    ]
-                }
-            );
+        log("[A] initial=" + state(ms));
+
+        cp(name + ":SET_SRC");
+
+        video.src = url;
+
+        video.load();
+
+        await sleep(150);
+
+        log("[A] after attach=" + state(ms));
+
+        cp(name + ":DETACH");
+
+        video.removeAttribute("src");
+        video.load();
+
+        await sleep(100);
+
+        log("[A] after detach=" + state(ms));
 
         cp(name + ":READ_RETAINED");
 
         log(
-            "[B] source buffer length=" +
-            x.buffer.byteLength
+            "[A] retained readyState=" +
+            state(ms)
         );
-
-        log(
-            "[B] retained view length=" +
-            retained.length
-        );
-
-        log(
-            "[B] retained byteLength=" +
-            retained.byteLength
-        );
-
-        log(
-            "[B] clone length=" +
-            clone.byteLength
-        );
-
-        /*
-         * Reading a detached view must not expose
-         * the transferred buffer's old contents.
-         */
-
-        let readResult;
-
-        try {
-            readResult =
-                retained[0];
-        } catch(e) {
-            readResult =
-                "THREW:" + e.name;
-        }
-
-        log(
-            "[B] retained[0]=" +
-            readResult
-        );
-
-        if (
-            x.buffer.byteLength !== 0
-        ) {
-            bad(
-                name,
-                "source buffer still attached"
-            );
-        }
-
-        if (
-            clone.byteLength !== 32768
-        ) {
-            bad(
-                name,
-                "clone size mismatch"
-            );
-        }
 
         cp(name + ":COMPLETE");
-        good(name);
 
-    } catch(e) {
-
-        caught(name, e);
-    }
-}
-
-
-/*
- * C
- *
- * MessageChannel transfer.
- */
-
-async function testC() {
-
-    const name =
-        "C_MESSAGECHANNEL_TRANSFER";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const channel =
-            new MessageChannel();
-
-        const x =
-            makeBuffer(49152);
-
-        const expected =
-            checksum(x.view);
-
-        const result =
-            await new Promise(
-                (resolve, reject) => {
-
-                    const timer =
-                        setTimeout(
-                            () =>
-                                reject(
-                                    new Error(
-                                        "MessageChannel timeout"
-                                    )
-                                ),
-                            2000
-                        );
-
-                    channel.port2.onmessage =
-                        function(event) {
-
-                            clearTimeout(timer);
-
-                            cp(
-                                name +
-                                ":MESSAGE_ENTER"
-                            );
-
-                            try {
-
-                                const received =
-                                    event.data;
-
-                                const view =
-                                    new Uint8Array(
-                                        received
-                                    );
-
-                                const sum =
-                                    checksum(view);
-
-                                log(
-                                    "[C] received length=" +
-                                    received.byteLength
-                                );
-
-                                log(
-                                    "[C] checksum=" +
-                                    sum
-                                );
-
-                                cp(
-                                    name +
-                                    ":MESSAGE_EXIT"
-                                );
-
-                                resolve({
-                                    length:
-                                        received.byteLength,
-                                    sum
-                                });
-
-                            } catch(e) {
-
-                                reject(e);
-                            }
-                        };
-
-                    cp(
-                        name +
-                        ":BEFORE_POST"
-                    );
-
-                    channel.port1.postMessage(
-                        x.buffer,
-                        [x.buffer]
-                    );
-
-                    cp(
-                        name +
-                        ":AFTER_POST"
-                    );
-
-                    log(
-                        "[C] source after post=" +
-                        x.buffer.byteLength
-                    );
-                }
-            );
-
-        if (
-            x.buffer.byteLength !== 0
-        ) {
-            bad(
-                name,
-                "source not detached"
-            );
-        }
-
-        if (
-            result.length !== 49152
-        ) {
-            bad(
-                name,
-                "received size mismatch"
-            );
-        }
-
-        if (
-            result.sum !== expected
-        ) {
-            bad(
-                name,
-                "received data mismatch"
-            );
-        }
-
-        channel.port1.close();
-        channel.port2.close();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-
-        caught(name, e);
-    }
-}
-
-
-/*
- * D
- *
- * Transfer from inside a MessageChannel
- * callback.
- */
-
-async function testD() {
-
-    const name =
-        "D_CALLBACK_TRANSFER";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const channel =
-            new MessageChannel();
-
-        const x =
-            makeBuffer(16384);
-
-        const retained =
-            x.view;
-
-        await new Promise(
-            (resolve, reject) => {
-
-                const timer =
-                    setTimeout(
-                        () =>
-                            reject(
-                                new Error(
-                                    "callback timeout"
-                                )
-                            ),
-                        2000
-                    );
-
-                channel.port1.onmessage =
-                    function() {
-
-                        cp(
-                            name +
-                            ":CALLBACK_ENTER"
-                        );
-
-                        try {
-
-                            const clone =
-                                structuredClone(
-                                    x.buffer,
-                                    {
-                                        transfer:[
-                                            x.buffer
-                                        ]
-                                    }
-                                );
-
-                            cp(
-                                name +
-                                ":TRANSFER_RETURNED"
-                            );
-
-                            log(
-                                "[D] source=" +
-                                x.buffer.byteLength
-                            );
-
-                            log(
-                                "[D] retained length=" +
-                                retained.length
-                            );
-
-                            log(
-                                "[D] clone=" +
-                                clone.byteLength
-                            );
-
-                            /*
-                             * Force additional ordinary JS work
-                             * while the detached wrapper remains
-                             * strongly referenced.
-                             */
-
-                            const objects = [];
-
-                            for (
-                                let i = 0;
-                                i < 100;
-                                i++
-                            ) {
-                                objects.push({
-                                    i,
-                                    text:
-                                        "v29-" + i
-                                });
-                            }
-
-                            log(
-                                "[D] ordinary objects=" +
-                                objects.length
-                            );
-
-                            cp(
-                                name +
-                                ":CALLBACK_EXIT"
-                            );
-
-                            clearTimeout(timer);
-                            resolve();
-
-                        } catch(e) {
-
-                            clearTimeout(timer);
-                            reject(e);
-                        }
-                    };
-
-                channel.port2.postMessage(
-                    "trigger"
-                );
-            }
-        );
-
-        channel.port1.close();
-        channel.port2.close();
-
-        cp(name + ":COMPLETE");
-        good(name);
-
-    } catch(e) {
-
-        caught(name, e);
-    }
-}
-
-
-/*
- * E
- *
- * Nested structuredClone operations.
- */
-
-async function testE() {
-
-    const name =
-        "E_NESTED_CLONE";
-
-    cp(name + ":CREATE");
-
-    try {
-
-        const state = {
-            name:"v29",
-            nested:{
-                value:12345
-            },
-            list:[
-                1,2,3,4,5
-            ]
-        };
-
-        cp(name + ":CLONE_1");
-
-        const a =
-            structuredClone(state);
-
-        cp(name + ":CLONE_2");
-
-        const b =
-            structuredClone(a);
-
-        cp(name + ":VERIFY");
-
-        if (
-            b.name !== "v29" ||
-            b.nested.value !== 12345 ||
-            b.list.length !== 5
-        ) {
-            bad(
-                name,
-                "structured data mismatch"
-            );
-        }
-
-        good(name);
-        cp(name + ":COMPLETE");
-
-    } catch(e) {
-
-        caught(name, e);
-    }
-}
-
-
-/*
- * F
- *
- * Worker round-trip transfer.
- */
-
-async function testF() {
-
-    const name =
-        "F_WORKER_TRANSFER";
-
-    cp(name + ":CREATE");
-
-    let worker = null;
-    let workerURL = null;
-
-    try {
-
-        const source = `
-            self.onmessage = function(e) {
-
-                const buffer = e.data;
-
-                const view =
-                    new Uint8Array(buffer);
-
-                let sum = 0;
-
-                for (
-                    let i = 0;
-                    i < view.length;
-                    i += 97
-                ) {
-                    sum =
-                        (sum + view[i]) >>> 0;
-                }
-
-                self.postMessage(
-                    {
-                        buffer:buffer,
-                        sum:sum
-                    },
-                    [buffer]
-                );
-            };
-        `;
-
-        const blob =
-            new Blob(
-                [source],
-                {
-                    type:
-                        "text/javascript"
-                }
-            );
-
-        workerURL =
-            URL.createObjectURL(blob);
-
-        worker =
-            new Worker(workerURL);
-
-        const x =
-            makeBuffer(65536);
-
-        const expected =
-            checksum(x.view);
-
-        const result =
-            await new Promise(
-                (resolve, reject) => {
-
-                    const timer =
-                        setTimeout(
-                            () =>
-                                reject(
-                                    new Error(
-                                        "Worker timeout"
-                                    )
-                                ),
-                            3000
-                        );
-
-                    worker.onerror =
-                        function(e) {
-
-                            clearTimeout(timer);
-
-                            reject(
-                                new Error(
-                                    "Worker error: " +
-                                    e.message
-                                )
-                            );
-                        };
-
-                    worker.onmessage =
-                        function(e) {
-
-                            clearTimeout(timer);
-
-                            cp(
-                                name +
-                                ":WORKER_REPLY"
-                            );
-
-                            resolve(e.data);
-                        };
-
-                    cp(
-                        name +
-                        ":BEFORE_POST"
-                    );
-
-                    worker.postMessage(
-                        x.buffer,
-                        [x.buffer]
-                    );
-
-                    cp(
-                        name +
-                        ":AFTER_POST"
-                    );
-
-                    log(
-                        "[F] source after post=" +
-                        x.buffer.byteLength
-                    );
-                }
-            );
-
-        const returned =
-            result.buffer;
-
-        log(
-            "[F] returned length=" +
-            returned.byteLength
-        );
-
-        log(
-            "[F] worker checksum=" +
-            result.sum
-        );
-
-        const finalSum =
-            checksum(
-                new Uint8Array(
-                    returned
-                )
-            );
-
-        log(
-            "[F] returned checksum=" +
-            finalSum
-        );
-
-        if (
-            returned.byteLength !== 65536
-        ) {
-            bad(
-                name,
-                "returned size mismatch"
-            );
-        }
-
-        if (
-            result.sum !== expected ||
-            finalSum !== expected
-        ) {
-            bad(
-                name,
-                "worker data mismatch"
-            );
-        }
-
-        cp(name + ":COMPLETE");
         good(name);
 
     } catch(e) {
@@ -866,17 +182,470 @@ async function testF() {
 
     } finally {
 
-        try {
-            if (worker)
-                worker.terminate();
-        } catch (_) {}
+        cleanup(video, url);
+    }
+}
 
-        try {
-            if (workerURL)
-                URL.revokeObjectURL(
-                    workerURL
+
+/*
+ * B — Revoke object URL while attached.
+ */
+
+async function testB() {
+
+    const name = "B_REVOKE_ATTACHED";
+
+    cp(name + ":CREATE");
+
+    let video = null;
+    let url = null;
+
+    try {
+
+        const ms = new MediaSource();
+
+        video = makeVideo();
+
+        url = URL.createObjectURL(ms);
+
+        video.src = url;
+        video.load();
+
+        await sleep(100);
+
+        cp(name + ":BEFORE_REVOKE");
+
+        log(
+            "[B] before revoke=" +
+            state(ms)
+        );
+
+        URL.revokeObjectURL(url);
+
+        url = null;
+
+        cp(name + ":AFTER_REVOKE");
+
+        log(
+            "[B] after revoke=" +
+            state(ms)
+        );
+
+        /*
+         * Retain both wrappers and perform
+         * ordinary observable reads.
+         */
+
+        log(
+            "[B] video.src length=" +
+            video.src.length
+        );
+
+        log(
+            "[B] mediaSource state=" +
+            state(ms)
+        );
+
+        await sleep(150);
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        cleanup(video, url);
+    }
+}
+
+
+/*
+ * C — Remove media element from sourceopen.
+ */
+
+async function testC() {
+
+    const name = "C_REMOVE_ON_SOURCEOPEN";
+
+    cp(name + ":CREATE");
+
+    let video = null;
+    let url = null;
+
+    try {
+
+        const ms = new MediaSource();
+
+        video = makeVideo();
+
+        url = URL.createObjectURL(ms);
+
+        let opened = 0;
+
+        ms.addEventListener(
+            "sourceopen",
+            function() {
+
+                opened++;
+
+                cp(
+                    name +
+                    ":SOURCEOPEN_ENTER"
                 );
-        } catch (_) {}
+
+                log(
+                    "[C] sourceopen #" +
+                    opened +
+                    " state=" +
+                    state(ms)
+                );
+
+                /*
+                 * Synchronous DOM teardown while
+                 * sourceopen is being delivered.
+                 */
+
+                video.remove();
+
+                cp(
+                    name +
+                    ":VIDEO_REMOVED"
+                );
+
+                log(
+                    "[C] video connected=" +
+                    video.isConnected
+                );
+
+                log(
+                    "[C] retained MS=" +
+                    state(ms)
+                );
+
+                /*
+                 * Ordinary DOM work while retained
+                 * references are alive.
+                 */
+
+                const marker =
+                    document.createElement("div");
+
+                marker.textContent =
+                    "v30-marker";
+
+                document.body.appendChild(marker);
+
+                void marker.offsetHeight;
+
+                marker.remove();
+
+                cp(
+                    name +
+                    ":SOURCEOPEN_EXIT"
+                );
+            }
+        );
+
+        cp(name + ":SET_SRC");
+
+        video.src = url;
+        video.load();
+
+        await sleep(500);
+
+        log(
+            "[C] sourceopen count=" +
+            opened
+        );
+
+        log(
+            "[C] final state=" +
+            state(ms)
+        );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        cleanup(video, url);
+    }
+}
+
+
+/*
+ * D — Detach src from sourceopen callback.
+ */
+
+async function testD() {
+
+    const name = "D_DETACH_ON_SOURCEOPEN";
+
+    cp(name + ":CREATE");
+
+    let video = null;
+    let url = null;
+
+    try {
+
+        const ms = new MediaSource();
+
+        video = makeVideo();
+
+        url = URL.createObjectURL(ms);
+
+        let opened = 0;
+
+        ms.addEventListener(
+            "sourceopen",
+            function() {
+
+                opened++;
+
+                cp(
+                    name +
+                    ":SOURCEOPEN_ENTER"
+                );
+
+                log(
+                    "[D] enter state=" +
+                    state(ms)
+                );
+
+                video.removeAttribute("src");
+
+                cp(
+                    name +
+                    ":SRC_REMOVED"
+                );
+
+                video.load();
+
+                cp(
+                    name +
+                    ":LOAD_CALLED"
+                );
+
+                log(
+                    "[D] callback state=" +
+                    state(ms)
+                );
+
+                log(
+                    "[D] video.src=" +
+                    video.src
+                );
+
+                cp(
+                    name +
+                    ":SOURCEOPEN_EXIT"
+                );
+            }
+        );
+
+        video.src = url;
+        video.load();
+
+        await sleep(500);
+
+        log(
+            "[D] sourceopen count=" +
+            opened
+        );
+
+        log(
+            "[D] final state=" +
+            state(ms)
+        );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        cleanup(video, url);
+    }
+}
+
+
+/*
+ * E — Remove + reattach same video.
+ */
+
+async function testE() {
+
+    const name = "E_REMOVE_REATTACH";
+
+    cp(name + ":CREATE");
+
+    let video = null;
+    let url = null;
+
+    try {
+
+        const ms = new MediaSource();
+
+        video = makeVideo();
+
+        url = URL.createObjectURL(ms);
+
+        video.src = url;
+        video.load();
+
+        await sleep(120);
+
+        cp(name + ":REMOVE_VIDEO");
+
+        video.remove();
+
+        log(
+            "[E] connected after remove=" +
+            video.isConnected
+        );
+
+        log(
+            "[E] MS after remove=" +
+            state(ms)
+        );
+
+        await sleep(50);
+
+        cp(name + ":REATTACH_VIDEO");
+
+        document.body.appendChild(video);
+
+        log(
+            "[E] connected after attach=" +
+            video.isConnected
+        );
+
+        void video.offsetHeight;
+
+        await sleep(150);
+
+        log(
+            "[E] final MS=" +
+            state(ms)
+        );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        cleanup(video, url);
+    }
+}
+
+
+/*
+ * F — Retain MediaSource after full teardown.
+ */
+
+async function testF() {
+
+    const name = "F_RETAIN_AFTER_TEARDOWN";
+
+    cp(name + ":CREATE");
+
+    let video = null;
+    let url = null;
+
+    try {
+
+        const ms = new MediaSource();
+
+        video = makeVideo();
+
+        url = URL.createObjectURL(ms);
+
+        video.src = url;
+        video.load();
+
+        await sleep(120);
+
+        cp(name + ":TEARDOWN");
+
+        video.removeAttribute("src");
+        video.load();
+        video.remove();
+
+        URL.revokeObjectURL(url);
+        url = null;
+
+        await sleep(100);
+
+        cp(name + ":READ_RETAINED");
+
+        log(
+            "[F] readyState=" +
+            state(ms)
+        );
+
+        log(
+            "[F] sourceBuffers length=" +
+            ms.sourceBuffers.length
+        );
+
+        log(
+            "[F] activeSourceBuffers length=" +
+            ms.activeSourceBuffers.length
+        );
+
+        /*
+         * Ordinary allocations only — not a heap
+         * reclamation/spray operation.
+         */
+
+        const temp = [];
+
+        for (let i = 0; i < 100; i++) {
+            temp.push({
+                id:i,
+                text:"v30-" + i
+            });
+        }
+
+        log(
+            "[F] ordinary objects=" +
+            temp.length
+        );
+
+        log(
+            "[F] retained state again=" +
+            state(ms)
+        );
+
+        cp(name + ":COMPLETE");
+
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+
+    } finally {
+
+        cleanup(video, url);
     }
 }
 
@@ -890,69 +659,86 @@ async function run() {
     pass = 0;
     exceptions = 0;
     anomalies = 0;
+    unsupported = 0;
 
     statusBox.textContent =
         "STATUS: RUNNING";
 
     const previous =
         localStorage.getItem(
-            "PS5_V29_CHECKPOINT"
+            "PS5_V30_CHECKPOINT"
         );
 
-    if (previous)
+    if (previous) {
         log(
             "Previous checkpoint: " +
             previous
         );
+    }
 
-    log("PS5 13.60 - V29");
+    log("PS5 13.60 - V30");
     log(navigator.userAgent);
     log("");
 
     log(
-        "structuredClone: " +
-        typeof structuredClone
+        "MediaSource: " +
+        typeof MediaSource
     );
 
     log(
-        "ArrayBuffer: " +
-        typeof ArrayBuffer
-    );
-
-    log(
-        "MessageChannel: " +
-        typeof MessageChannel
-    );
-
-    log(
-        "Worker: " +
-        typeof Worker
+        "URL.createObjectURL: " +
+        typeof URL.createObjectURL
     );
 
     log("");
 
-    await testA();
-    await testB();
-    await testC();
-    await testD();
-    await testE();
-    await testF();
+    if (
+        typeof MediaSource !==
+        "function"
+    ) {
 
-    cp("V29:COMPLETE");
+        skip(
+            "V30",
+            "MediaSource unavailable"
+        );
+
+    } else {
+
+        await testA();
+        await testB();
+        await testC();
+        await testD();
+        await testE();
+        await testF();
+    }
+
+    cp("V30:COMPLETE");
 
     log("");
     log("==============================");
-    log("V29 RESULT");
+    log("V30 RESULT");
     log("==============================");
-    log("TESTS COMPLETED: 6");
+
+    log(
+        "TESTS COMPLETED: " +
+        (
+            pass +
+            exceptions
+        )
+    );
+
     log("PASS: " + pass);
     log("EXCEPTIONS: " + exceptions);
     log("ANOMALIES: " + anomalies);
+    log("UNSUPPORTED: " + unsupported);
+
     log("==============================");
 
     statusBox.textContent =
         exceptions || anomalies
         ? "STATUS: CHECK RESULT"
+        : unsupported
+        ? "STATUS: UNSUPPORTED"
         : "STATUS: NORMAL";
 
     runButton.disabled = false;
