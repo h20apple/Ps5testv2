@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V28 SMIL Reparent Comparison</title>
+<title>PS5 13.60 - V29 StructuredClone / Transfer Lifetime Probe</title>
 
 <style>
 body {
@@ -14,25 +14,20 @@ button {
     padding:10px 18px;
 }
 #status {
-    border:1px solid #555;
-    padding:10px;
     margin:15px 0;
+    padding:10px;
+    border:1px solid #555;
 }
 pre {
     white-space:pre-wrap;
     word-break:break-word;
 }
-svg {
-    position:absolute;
-    left:-10000px;
-    top:-10000px;
-}
 </style>
 
-<h2>PS5 13.60 — V28</h2>
-<div>SVG/SMIL synchronous reparent comparison</div>
+<h2>PS5 13.60 — V29</h2>
+<div>StructuredClone / transferable lifetime probe</div>
 
-<p><button id="run">RUN V28</button></p>
+<p><button id="run">RUN V29</button></p>
 
 <div id="status">READY</div>
 <pre id="log"></pre>
@@ -40,758 +35,928 @@ svg {
 <script>
 "use strict";
 
-const NS = "http://www.w3.org/2000/svg";
+const output = document.querySelector("#log");
+const statusBox = document.querySelector("#status");
+const runButton = document.querySelector("#run");
 
-const out = document.querySelector("#log");
-const status = document.querySelector("#status");
-const button = document.querySelector("#run");
-
+let pass = 0;
 let exceptions = 0;
 let anomalies = 0;
 
 function log(s) {
-    out.textContent += s + "\n";
+    output.textContent += s + "\n";
     console.log(s);
 }
 
-function cp(s) {
+function cp(stage) {
     try {
-        localStorage.setItem("PS5_V28_CHECKPOINT", s);
+        localStorage.setItem(
+            "PS5_V29_CHECKPOINT",
+            stage
+        );
     } catch (_) {}
 
-    log("[CP] " + s);
+    log("[CP] " + stage);
 }
 
-function make(name) {
-    return document.createElementNS(NS, name);
+function good(name) {
+    pass++;
+    log("[PASS] " + name);
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function safe(fn) {
-    try {
-        return fn();
-    } catch (e) {
-        return "EXCEPTION:" + e.name;
-    }
-}
-
-function info(root, anim, left, right) {
-
-    const parent =
-        anim.parentNode === left ? "LEFT" :
-        anim.parentNode === right ? "RIGHT" :
-        anim.parentNode ?
-            anim.parentNode.nodeName :
-            "null";
-
-    return {
-        parent: parent,
-
-        connected: anim.isConnected,
-
-        svgTime: safe(() =>
-            root.getCurrentTime().toFixed(4)
-        ),
-
-        startTime: safe(() =>
-            anim.getStartTime().toFixed(4)
-        ),
-
-        leftWidth: safe(() =>
-            left.getAttribute("width")
-        ),
-
-        rightWidth: safe(() =>
-            right.getAttribute("width")
-        )
-    };
-}
-
-function dump(label, data) {
-
+function bad(name, reason) {
+    anomalies++;
     log(
-        label +
-        " parent=" + data.parent +
-        " connected=" + data.connected +
-        " svgTime=" + data.svgTime +
-        " startTime=" + data.startTime +
-        " leftWidth=" + data.leftWidth +
-        " rightWidth=" + data.rightWidth
+        "[ANOMALY] " +
+        name +
+        " :: " +
+        reason
     );
 }
 
-function buildTree() {
+function caught(name, e) {
+    exceptions++;
+    log(
+        "[EXCEPTION] " +
+        name +
+        " :: " +
+        e
+    );
+}
 
-    const root = make("svg");
+function sleep(ms) {
+    return new Promise(
+        resolve => setTimeout(resolve, ms)
+    );
+}
 
-    root.setAttribute("width", "200");
-    root.setAttribute("height", "100");
+function makeBuffer(size) {
 
-    const left = make("rect");
+    const buffer =
+        new ArrayBuffer(size);
 
-    left.setAttribute("x", "0");
-    left.setAttribute("y", "0");
-    left.setAttribute("width", "20");
-    left.setAttribute("height", "20");
+    const view =
+        new Uint8Array(buffer);
 
-    const right = make("rect");
-
-    right.setAttribute("x", "50");
-    right.setAttribute("y", "0");
-    right.setAttribute("width", "30");
-    right.setAttribute("height", "20");
-
-    const anim = make("animate");
-
-    anim.setAttribute("attributeName", "width");
-    anim.setAttribute("from", "20");
-    anim.setAttribute("to", "80");
-    anim.setAttribute("dur", "0.10s");
-    anim.setAttribute("begin", "indefinite");
-    anim.setAttribute("fill", "freeze");
-
-    left.appendChild(anim);
-
-    root.appendChild(left);
-    root.appendChild(right);
-
-    document.body.appendChild(root);
+    for (
+        let i = 0;
+        i < view.length;
+        i++
+    ) {
+        view[i] =
+            (i * 17 + 23) & 255;
+    }
 
     return {
-        root,
-        left,
-        right,
-        anim
+        buffer,
+        view
     };
 }
 
+function checksum(view) {
 
-/*
- * CASE A
- *
- * Control:
- * beginElement() with no reparent.
- */
+    let n = 0;
 
-async function caseA() {
-
-    const name = "A_CONTROL";
-
-    cp(name + ":CREATE");
-
-    const {
-        root,
-        left,
-        right,
-        anim
-    } = buildTree();
-
-    let begins = 0;
-    let ends = 0;
-
-    try {
-
-        anim.addEventListener(
-            "beginEvent",
-            function(e) {
-
-                begins++;
-
-                cp(
-                    name +
-                    ":BEGIN_" +
-                    begins
-                );
-
-                log(
-                    "[A BEGIN #" +
-                    begins +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
-
-                dump(
-                    "[A STATE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-            }
-        );
-
-        anim.addEventListener(
-            "endEvent",
-            function(e) {
-
-                ends++;
-
-                cp(
-                    name +
-                    ":END_" +
-                    ends
-                );
-
-                log(
-                    "[A END #" +
-                    ends +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
-
-                dump(
-                    "[A END STATE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-            }
-        );
-
-        cp(name + ":BEFORE_BEGIN");
-
-        anim.beginElement();
-
-        cp(name + ":AFTER_BEGIN_RETURN");
-
-        await sleep(400);
-
-        dump(
-            "[A FINAL]",
-            info(
-                root,
-                anim,
-                left,
-                right
-            )
-        );
-
-        log(
-            "[A RESULT] begins=" +
-            begins +
-            " ends=" +
-            ends
-        );
-
-        return {
-            begins,
-            ends
-        };
-
-    } finally {
-
-        root.remove();
-
-        cp(name + ":COMPLETE");
+    for (
+        let i = 0;
+        i < view.length;
+        i += 97
+    ) {
+        n =
+            (n + view[i]) >>> 0;
     }
+
+    return n;
 }
 
 
 /*
- * CASE B
+ * A
  *
- * Reparent synchronously while WebKit
- * is delivering beginEvent.
+ * Basic structuredClone transfer.
+ *
+ * The original ArrayBuffer should become
+ * detached after successful transfer.
  */
 
-async function caseB() {
+async function testA() {
 
-    const name = "B_SYNC_REPARENT";
+    const name =
+        "A_BASIC_TRANSFER";
 
     cp(name + ":CREATE");
 
-    const {
-        root,
-        left,
-        right,
-        anim
-    } = buildTree();
-
-    let begins = 0;
-    let ends = 0;
-    let moved = false;
-
     try {
 
-        anim.addEventListener(
-            "beginEvent",
-            function(e) {
+        const x =
+            makeBuffer(65536);
 
-                begins++;
+        const expected =
+            checksum(x.view);
 
-                cp(
-                    name +
-                    ":BEGIN_" +
-                    begins +
-                    "_ENTER"
-                );
+        cp(name + ":BEFORE_CLONE");
 
-                log(
-                    "[B BEGIN #" +
-                    begins +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
-
-                dump(
-                    "[B BEFORE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-
-                if (!moved) {
-
-                    moved = true;
-
-                    cp(
-                        name +
-                        ":BEFORE_SYNC_MOVE"
-                    );
-
-                    right.appendChild(anim);
-
-                    cp(
-                        name +
-                        ":AFTER_SYNC_MOVE"
-                    );
-
-                    dump(
-                        "[B AFTER MOVE]",
-                        info(
-                            root,
-                            anim,
-                            left,
-                            right
-                        )
-                    );
-
-                    /*
-                     * Force observable style/layout work
-                     * while retained DOM wrappers remain
-                     * available.
-                     */
-
-                    safe(() =>
-                        root.getBoundingClientRect()
-                    );
-
-                    safe(() =>
-                        left.getBoundingClientRect()
-                    );
-
-                    safe(() =>
-                        right.getBoundingClientRect()
-                    );
-
-                    void document.body.offsetHeight;
+        const clone =
+            structuredClone(
+                x.buffer,
+                {
+                    transfer:[
+                        x.buffer
+                    ]
                 }
+            );
 
-                cp(
-                    name +
-                    ":BEGIN_" +
-                    begins +
-                    "_EXIT"
-                );
-            }
-        );
+        cp(name + ":AFTER_CLONE");
 
-        anim.addEventListener(
-            "endEvent",
-            function(e) {
-
-                ends++;
-
-                cp(
-                    name +
-                    ":END_" +
-                    ends
-                );
-
-                log(
-                    "[B END #" +
-                    ends +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
-
-                dump(
-                    "[B END STATE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-            }
-        );
-
-        cp(name + ":BEFORE_BEGIN");
-
-        anim.beginElement();
-
-        cp(name + ":AFTER_BEGIN_RETURN");
-
-        await sleep(400);
-
-        dump(
-            "[B FINAL]",
-            info(
-                root,
-                anim,
-                left,
-                right
-            )
+        log(
+            "[A] original byteLength=" +
+            x.buffer.byteLength
         );
 
         log(
-            "[B RESULT] begins=" +
-            begins +
-            " ends=" +
-            ends
+            "[A] clone byteLength=" +
+            clone.byteLength
         );
 
-        return {
-            begins,
-            ends
-        };
+        const cloneView =
+            new Uint8Array(clone);
 
-    } finally {
+        const actual =
+            checksum(cloneView);
 
-        root.remove();
+        log(
+            "[A] expected checksum=" +
+            expected
+        );
+
+        log(
+            "[A] actual checksum=" +
+            actual
+        );
+
+        if (
+            x.buffer.byteLength !== 0
+        ) {
+            bad(
+                name,
+                "source buffer not detached"
+            );
+        }
+
+        if (
+            clone.byteLength !== 65536
+        ) {
+            bad(
+                name,
+                "unexpected clone size"
+            );
+        }
+
+        if (
+            expected !== actual
+        ) {
+            bad(
+                name,
+                "clone data mismatch"
+            );
+        }
 
         cp(name + ":COMPLETE");
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
     }
 }
 
 
 /*
- * CASE C
+ * B
  *
- * Reparent outside the callback.
- *
- * This establishes whether moving an active
- * animation normally causes another beginEvent.
+ * Retain a typed-array wrapper while its
+ * underlying buffer is transferred.
  */
 
-async function caseC() {
+async function testB() {
 
-    const name = "C_ASYNC_REPARENT";
+    const name =
+        "B_RETAINED_VIEW";
 
     cp(name + ":CREATE");
 
-    const {
-        root,
-        left,
-        right,
-        anim
-    } = buildTree();
-
-    let begins = 0;
-    let ends = 0;
-
     try {
 
-        anim.addEventListener(
-            "beginEvent",
-            function(e) {
+        const x =
+            makeBuffer(32768);
 
-                begins++;
+        const retained =
+            x.view;
 
-                cp(
-                    name +
-                    ":BEGIN_" +
-                    begins
-                );
+        cp(name + ":TRANSFER");
 
-                log(
-                    "[C BEGIN #" +
-                    begins +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
+        const clone =
+            structuredClone(
+                x.buffer,
+                {
+                    transfer:[
+                        x.buffer
+                    ]
+                }
+            );
 
-                dump(
-                    "[C BEGIN STATE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-            }
+        cp(name + ":READ_RETAINED");
+
+        log(
+            "[B] source buffer length=" +
+            x.buffer.byteLength
         );
 
-        anim.addEventListener(
-            "endEvent",
-            function(e) {
-
-                ends++;
-
-                cp(
-                    name +
-                    ":END_" +
-                    ends
-                );
-
-                log(
-                    "[C END #" +
-                    ends +
-                    "] eventTime=" +
-                    e.timeStamp
-                );
-
-                dump(
-                    "[C END STATE]",
-                    info(
-                        root,
-                        anim,
-                        left,
-                        right
-                    )
-                );
-            }
+        log(
+            "[B] retained view length=" +
+            retained.length
         );
 
-        cp(name + ":BEFORE_BEGIN");
+        log(
+            "[B] retained byteLength=" +
+            retained.byteLength
+        );
 
-        anim.beginElement();
-
-        cp(name + ":AFTER_BEGIN_RETURN");
+        log(
+            "[B] clone length=" +
+            clone.byteLength
+        );
 
         /*
-         * Important difference from B:
-         * this executes after beginElement()
-         * and its immediate event processing
-         * have returned.
+         * Reading a detached view must not expose
+         * the transferred buffer's old contents.
          */
 
-        await sleep(20);
+        let readResult;
 
-        cp(name + ":BEFORE_ASYNC_MOVE");
+        try {
+            readResult =
+                retained[0];
+        } catch(e) {
+            readResult =
+                "THREW:" + e.name;
+        }
 
-        dump(
-            "[C BEFORE MOVE]",
-            info(
-                root,
-                anim,
-                left,
-                right
-            )
+        log(
+            "[B] retained[0]=" +
+            readResult
         );
 
-        right.appendChild(anim);
+        if (
+            x.buffer.byteLength !== 0
+        ) {
+            bad(
+                name,
+                "source buffer still attached"
+            );
+        }
 
-        cp(name + ":AFTER_ASYNC_MOVE");
+        if (
+            clone.byteLength !== 32768
+        ) {
+            bad(
+                name,
+                "clone size mismatch"
+            );
+        }
 
-        dump(
-            "[C AFTER MOVE]",
-            info(
-                root,
-                anim,
-                left,
-                right
-            )
+        cp(name + ":COMPLETE");
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+    }
+}
+
+
+/*
+ * C
+ *
+ * MessageChannel transfer.
+ */
+
+async function testC() {
+
+    const name =
+        "C_MESSAGECHANNEL_TRANSFER";
+
+    cp(name + ":CREATE");
+
+    try {
+
+        const channel =
+            new MessageChannel();
+
+        const x =
+            makeBuffer(49152);
+
+        const expected =
+            checksum(x.view);
+
+        const result =
+            await new Promise(
+                (resolve, reject) => {
+
+                    const timer =
+                        setTimeout(
+                            () =>
+                                reject(
+                                    new Error(
+                                        "MessageChannel timeout"
+                                    )
+                                ),
+                            2000
+                        );
+
+                    channel.port2.onmessage =
+                        function(event) {
+
+                            clearTimeout(timer);
+
+                            cp(
+                                name +
+                                ":MESSAGE_ENTER"
+                            );
+
+                            try {
+
+                                const received =
+                                    event.data;
+
+                                const view =
+                                    new Uint8Array(
+                                        received
+                                    );
+
+                                const sum =
+                                    checksum(view);
+
+                                log(
+                                    "[C] received length=" +
+                                    received.byteLength
+                                );
+
+                                log(
+                                    "[C] checksum=" +
+                                    sum
+                                );
+
+                                cp(
+                                    name +
+                                    ":MESSAGE_EXIT"
+                                );
+
+                                resolve({
+                                    length:
+                                        received.byteLength,
+                                    sum
+                                });
+
+                            } catch(e) {
+
+                                reject(e);
+                            }
+                        };
+
+                    cp(
+                        name +
+                        ":BEFORE_POST"
+                    );
+
+                    channel.port1.postMessage(
+                        x.buffer,
+                        [x.buffer]
+                    );
+
+                    cp(
+                        name +
+                        ":AFTER_POST"
+                    );
+
+                    log(
+                        "[C] source after post=" +
+                        x.buffer.byteLength
+                    );
+                }
+            );
+
+        if (
+            x.buffer.byteLength !== 0
+        ) {
+            bad(
+                name,
+                "source not detached"
+            );
+        }
+
+        if (
+            result.length !== 49152
+        ) {
+            bad(
+                name,
+                "received size mismatch"
+            );
+        }
+
+        if (
+            result.sum !== expected
+        ) {
+            bad(
+                name,
+                "received data mismatch"
+            );
+        }
+
+        channel.port1.close();
+        channel.port2.close();
+
+        cp(name + ":COMPLETE");
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
+    }
+}
+
+
+/*
+ * D
+ *
+ * Transfer from inside a MessageChannel
+ * callback.
+ */
+
+async function testD() {
+
+    const name =
+        "D_CALLBACK_TRANSFER";
+
+    cp(name + ":CREATE");
+
+    try {
+
+        const channel =
+            new MessageChannel();
+
+        const x =
+            makeBuffer(16384);
+
+        const retained =
+            x.view;
+
+        await new Promise(
+            (resolve, reject) => {
+
+                const timer =
+                    setTimeout(
+                        () =>
+                            reject(
+                                new Error(
+                                    "callback timeout"
+                                )
+                            ),
+                        2000
+                    );
+
+                channel.port1.onmessage =
+                    function() {
+
+                        cp(
+                            name +
+                            ":CALLBACK_ENTER"
+                        );
+
+                        try {
+
+                            const clone =
+                                structuredClone(
+                                    x.buffer,
+                                    {
+                                        transfer:[
+                                            x.buffer
+                                        ]
+                                    }
+                                );
+
+                            cp(
+                                name +
+                                ":TRANSFER_RETURNED"
+                            );
+
+                            log(
+                                "[D] source=" +
+                                x.buffer.byteLength
+                            );
+
+                            log(
+                                "[D] retained length=" +
+                                retained.length
+                            );
+
+                            log(
+                                "[D] clone=" +
+                                clone.byteLength
+                            );
+
+                            /*
+                             * Force additional ordinary JS work
+                             * while the detached wrapper remains
+                             * strongly referenced.
+                             */
+
+                            const objects = [];
+
+                            for (
+                                let i = 0;
+                                i < 100;
+                                i++
+                            ) {
+                                objects.push({
+                                    i,
+                                    text:
+                                        "v29-" + i
+                                });
+                            }
+
+                            log(
+                                "[D] ordinary objects=" +
+                                objects.length
+                            );
+
+                            cp(
+                                name +
+                                ":CALLBACK_EXIT"
+                            );
+
+                            clearTimeout(timer);
+                            resolve();
+
+                        } catch(e) {
+
+                            clearTimeout(timer);
+                            reject(e);
+                        }
+                    };
+
+                channel.port2.postMessage(
+                    "trigger"
+                );
+            }
         );
 
-        safe(() =>
-            root.getBoundingClientRect()
-        );
+        channel.port1.close();
+        channel.port2.close();
 
-        void document.body.offsetHeight;
+        cp(name + ":COMPLETE");
+        good(name);
 
-        await sleep(400);
+    } catch(e) {
 
-        dump(
-            "[C FINAL]",
-            info(
-                root,
-                anim,
-                left,
-                right
-            )
+        caught(name, e);
+    }
+}
+
+
+/*
+ * E
+ *
+ * Nested structuredClone operations.
+ */
+
+async function testE() {
+
+    const name =
+        "E_NESTED_CLONE";
+
+    cp(name + ":CREATE");
+
+    try {
+
+        const state = {
+            name:"v29",
+            nested:{
+                value:12345
+            },
+            list:[
+                1,2,3,4,5
+            ]
+        };
+
+        cp(name + ":CLONE_1");
+
+        const a =
+            structuredClone(state);
+
+        cp(name + ":CLONE_2");
+
+        const b =
+            structuredClone(a);
+
+        cp(name + ":VERIFY");
+
+        if (
+            b.name !== "v29" ||
+            b.nested.value !== 12345 ||
+            b.list.length !== 5
+        ) {
+            bad(
+                name,
+                "structured data mismatch"
+            );
+        }
+
+        good(name);
+        cp(name + ":COMPLETE");
+
+    } catch(e) {
+
+        caught(name, e);
+    }
+}
+
+
+/*
+ * F
+ *
+ * Worker round-trip transfer.
+ */
+
+async function testF() {
+
+    const name =
+        "F_WORKER_TRANSFER";
+
+    cp(name + ":CREATE");
+
+    let worker = null;
+    let workerURL = null;
+
+    try {
+
+        const source = `
+            self.onmessage = function(e) {
+
+                const buffer = e.data;
+
+                const view =
+                    new Uint8Array(buffer);
+
+                let sum = 0;
+
+                for (
+                    let i = 0;
+                    i < view.length;
+                    i += 97
+                ) {
+                    sum =
+                        (sum + view[i]) >>> 0;
+                }
+
+                self.postMessage(
+                    {
+                        buffer:buffer,
+                        sum:sum
+                    },
+                    [buffer]
+                );
+            };
+        `;
+
+        const blob =
+            new Blob(
+                [source],
+                {
+                    type:
+                        "text/javascript"
+                }
+            );
+
+        workerURL =
+            URL.createObjectURL(blob);
+
+        worker =
+            new Worker(workerURL);
+
+        const x =
+            makeBuffer(65536);
+
+        const expected =
+            checksum(x.view);
+
+        const result =
+            await new Promise(
+                (resolve, reject) => {
+
+                    const timer =
+                        setTimeout(
+                            () =>
+                                reject(
+                                    new Error(
+                                        "Worker timeout"
+                                    )
+                                ),
+                            3000
+                        );
+
+                    worker.onerror =
+                        function(e) {
+
+                            clearTimeout(timer);
+
+                            reject(
+                                new Error(
+                                    "Worker error: " +
+                                    e.message
+                                )
+                            );
+                        };
+
+                    worker.onmessage =
+                        function(e) {
+
+                            clearTimeout(timer);
+
+                            cp(
+                                name +
+                                ":WORKER_REPLY"
+                            );
+
+                            resolve(e.data);
+                        };
+
+                    cp(
+                        name +
+                        ":BEFORE_POST"
+                    );
+
+                    worker.postMessage(
+                        x.buffer,
+                        [x.buffer]
+                    );
+
+                    cp(
+                        name +
+                        ":AFTER_POST"
+                    );
+
+                    log(
+                        "[F] source after post=" +
+                        x.buffer.byteLength
+                    );
+                }
+            );
+
+        const returned =
+            result.buffer;
+
+        log(
+            "[F] returned length=" +
+            returned.byteLength
         );
 
         log(
-            "[C RESULT] begins=" +
-            begins +
-            " ends=" +
-            ends
+            "[F] worker checksum=" +
+            result.sum
         );
 
-        return {
-            begins,
-            ends
-        };
+        const finalSum =
+            checksum(
+                new Uint8Array(
+                    returned
+                )
+            );
+
+        log(
+            "[F] returned checksum=" +
+            finalSum
+        );
+
+        if (
+            returned.byteLength !== 65536
+        ) {
+            bad(
+                name,
+                "returned size mismatch"
+            );
+        }
+
+        if (
+            result.sum !== expected ||
+            finalSum !== expected
+        ) {
+            bad(
+                name,
+                "worker data mismatch"
+            );
+        }
+
+        cp(name + ":COMPLETE");
+        good(name);
+
+    } catch(e) {
+
+        caught(name, e);
 
     } finally {
 
-        root.remove();
+        try {
+            if (worker)
+                worker.terminate();
+        } catch (_) {}
 
-        cp(name + ":COMPLETE");
+        try {
+            if (workerURL)
+                URL.revokeObjectURL(
+                    workerURL
+                );
+        } catch (_) {}
     }
 }
 
 
 async function run() {
 
-    button.disabled = true;
+    runButton.disabled = true;
 
-    out.textContent = "";
+    output.textContent = "";
 
+    pass = 0;
     exceptions = 0;
     anomalies = 0;
 
-    status.textContent = "RUNNING";
+    statusBox.textContent =
+        "STATUS: RUNNING";
 
-    const old =
+    const previous =
         localStorage.getItem(
-            "PS5_V28_CHECKPOINT"
+            "PS5_V29_CHECKPOINT"
         );
 
-    if (old) {
+    if (previous)
         log(
             "Previous checkpoint: " +
-            old
+            previous
         );
-    }
 
-    log("PS5 13.60 - V28");
+    log("PS5 13.60 - V29");
     log(navigator.userAgent);
-
     log("");
+
     log(
-        "SVGAnimationElement=" +
-        typeof SVGAnimationElement
+        "structuredClone: " +
+        typeof structuredClone
+    );
+
+    log(
+        "ArrayBuffer: " +
+        typeof ArrayBuffer
+    );
+
+    log(
+        "MessageChannel: " +
+        typeof MessageChannel
+    );
+
+    log(
+        "Worker: " +
+        typeof Worker
     );
 
     log("");
 
-    let A = null;
-    let B = null;
-    let C = null;
+    await testA();
+    await testB();
+    await testC();
+    await testD();
+    await testE();
+    await testF();
 
-    try {
-
-        A = await caseA();
-
-        await sleep(100);
-
-        B = await caseB();
-
-        await sleep(100);
-
-        C = await caseC();
-
-        cp("V28:FINAL_ANALYSIS");
-
-        log("");
-        log("==============================");
-        log("V28 COMPARISON");
-        log("==============================");
-
-        log(
-            "CONTROL      begins=" +
-            A.begins +
-            " ends=" +
-            A.ends
-        );
-
-        log(
-            "SYNC MOVE    begins=" +
-            B.begins +
-            " ends=" +
-            B.ends
-        );
-
-        log(
-            "ASYNC MOVE   begins=" +
-            C.begins +
-            " ends=" +
-            C.ends
-        );
-
-        /*
-         * This isn't automatically a security
-         * anomaly. It highlights the behavioural
-         * difference we're investigating.
-         */
-
-        if (
-            B.begins > A.begins &&
-            B.begins > C.begins
-        ) {
-
-            log("");
-            log(
-                "[OBSERVATION] Extra beginEvent is specific " +
-                "to synchronous callback reparenting."
-            );
-
-        } else if (
-            B.begins > A.begins &&
-            C.begins > A.begins
-        ) {
-
-            log("");
-            log(
-                "[OBSERVATION] Reparenting itself restarts/" +
-                "reinitializes the animation."
-            );
-
-        } else {
-
-            log("");
-            log(
-                "[OBSERVATION] No unique synchronous " +
-                "reparent behaviour detected."
-            );
-        }
-
-        cp("V28:COMPLETE");
-
-    } catch (e) {
-
-        exceptions++;
-
-        cp("V28:EXCEPTION");
-
-        log("");
-        log("[EXCEPTION] " + e);
-
-        try {
-            log(e.stack || "");
-        } catch (_) {}
-    }
+    cp("V29:COMPLETE");
 
     log("");
     log("==============================");
-    log("V28 RESULT");
+    log("V29 RESULT");
     log("==============================");
+    log("TESTS COMPLETED: 6");
+    log("PASS: " + pass);
     log("EXCEPTIONS: " + exceptions);
     log("ANOMALIES: " + anomalies);
     log("==============================");
 
-    status.textContent =
-        exceptions || anomalies ?
-        "STATUS: CHECK RESULT" :
-        "STATUS: NORMAL";
+    statusBox.textContent =
+        exceptions || anomalies
+        ? "STATUS: CHECK RESULT"
+        : "STATUS: NORMAL";
 
-    button.disabled = false;
+    runButton.disabled = false;
 }
 
-button.onclick = run;
+runButton.onclick = run;
 </script>
