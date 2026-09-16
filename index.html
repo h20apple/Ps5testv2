@@ -1,71 +1,584 @@
-<!DOCTYPE html>
-<html>
-<body>
-<div id="result"></div>
+<!doctype html>
+<meta charset="utf-8">
+<title>PS5 13.60 - V35 TransformStream Iterator Probe</title>
+
+<style>
+body {
+    background:#111;
+    color:#eee;
+    font:15px monospace;
+    padding:18px;
+}
+button {
+    font:18px monospace;
+    padding:10px 18px;
+}
+#status {
+    margin:15px 0;
+    padding:10px;
+    border:1px solid #555;
+}
+pre {
+    white-space:pre-wrap;
+    word-break:break-word;
+}
+</style>
+
+<h2>PS5 13.60 — V35</h2>
+<div>TransformStream iterator reachability / crash probe</div>
+
+<p><button id="run">RUN V35</button></p>
+
+<div id="status">READY</div>
+<pre id="log"></pre>
+
 <script>
-function check(label, fn) {
-    let message;
-    try {
-        fn();
-        message = "FAIL: " + label + " did not throw";
-    } catch (e) {
-        if (e instanceof TypeError)
-            message = "PASS: " + label + " threw TypeError";
-        else
-            message = "FAIL: " + label + " threw " + e;
-    }
-    const div = document.createElement("div");
-    div.textContent = message;
-    document.getElementById("result").appendChild(div);
+"use strict";
+
+const out = document.querySelector("#log");
+const status = document.querySelector("#status");
+const button = document.querySelector("#run");
+
+const originalIterator =
+    Array.prototype[Symbol.iterator];
+
+let tests = 0;
+let completed = 0;
+let exceptions = 0;
+let anomalies = 0;
+
+function log(x) {
+    out.textContent += x + "\n";
+    console.log(x);
 }
 
-const originalIterator = Array.prototype[Symbol.iterator];
+function cp(x) {
+    try {
+        localStorage.setItem(
+            "PS5_V35_CP",
+            x
+        );
+    } catch (_) {}
 
-// Variant 1: substitute plain objects for the readable/writable slots.
-Array.prototype[Symbol.iterator] = function() {
-    const arr = this;
-    let i = 0;
-    return {
-        next() {
-            if (i >= arr.length)
-                return { done: true };
-            let val = arr[i];
-            if (arr.length === 3 && i >= 1)
-                val = { fake: true };
-            i++;
-            return { value: val, done: false };
+    log("[CP] " + x);
+}
+
+function restore() {
+    Array.prototype[Symbol.iterator] =
+        originalIterator;
+}
+
+function installIterator(name, transform) {
+
+    let iteratorCalls = 0;
+    let nextCalls = 0;
+
+    Array.prototype[Symbol.iterator] =
+        function() {
+
+            iteratorCalls++;
+
+            const arr = this;
+            let i = 0;
+
+            cp(
+                name +
+                ":ITERATOR_CALL_" +
+                iteratorCalls +
+                ":LEN_" +
+                arr.length
+            );
+
+            return {
+                next() {
+
+                    nextCalls++;
+
+                    cp(
+                        name +
+                        ":NEXT_" +
+                        nextCalls
+                    );
+
+                    if (i >= arr.length) {
+                        return {
+                            done:true,
+                            value:undefined
+                        };
+                    }
+
+                    const original =
+                        arr[i];
+
+                    const replacement =
+                        transform(
+                            original,
+                            i,
+                            arr
+                        );
+
+                    log(
+                        "[" + name + "] index=" +
+                        i +
+                        " len=" +
+                        arr.length +
+                        " originalType=" +
+                        typeof original +
+                        " returnedType=" +
+                        typeof replacement
+                    );
+
+                    i++;
+
+                    return {
+                        done:false,
+                        value:replacement
+                    };
+                },
+
+                return() {
+
+                    cp(
+                        name +
+                        ":ITERATOR_RETURN"
+                    );
+
+                    return {
+                        done:true
+                    };
+                }
+            };
+        };
+
+    return function stats() {
+        return {
+            iteratorCalls,
+            nextCalls
+        };
+    };
+}
+
+async function runCase(
+    name,
+    transform
+) {
+    tests++;
+
+    log("");
+    log("============================");
+    log(name);
+    log("============================");
+
+    cp(name + ":START");
+
+    let stats;
+
+    try {
+
+        stats =
+            installIterator(
+                name,
+                transform
+            );
+
+        cp(
+            name +
+            ":BEFORE_CONSTRUCTOR"
+        );
+
+        let stream;
+
+        try {
+
+            stream =
+                new TransformStream();
+
+            cp(
+                name +
+                ":CONSTRUCTOR_RETURNED"
+            );
+
+            log(
+                "[" + name +
+                "] constructor SUCCESS"
+            );
+
+            log(
+                "[" + name +
+                "] readable=" +
+                typeof stream.readable
+            );
+
+            log(
+                "[" + name +
+                "] writable=" +
+                typeof stream.writable
+            );
+
+        } catch(e) {
+
+            exceptions++;
+
+            cp(
+                name +
+                ":CONSTRUCTOR_EXCEPTION"
+            );
+
+            log(
+                "[" + name +
+                "] exception=" +
+                e.name +
+                ": " +
+                e.message
+            );
+        }
+
+        const s = stats();
+
+        log(
+            "[" + name +
+            "] iteratorCalls=" +
+            s.iteratorCalls
+        );
+
+        log(
+            "[" + name +
+            "] nextCalls=" +
+            s.nextCalls
+        );
+
+        /*
+         * The crucial result:
+         *
+         * If iteratorCalls == 0, the supplied
+         * candidate's Array iterator assumption
+         * is not being reached here.
+         */
+
+        if (s.iteratorCalls === 0) {
+
+            log(
+                "[" + name +
+                "] Array iterator NOT reached"
+            );
+
+        } else {
+
+            log(
+                "[" + name +
+                "] Array iterator REACHED"
+            );
+        }
+
+        completed++;
+
+        cp(name + ":COMPLETE");
+
+    } catch(e) {
+
+        exceptions++;
+
+        log(
+            "[" + name +
+            "] top-level exception: " +
+            e
+        );
+
+        cp(name + ":TOP_EXCEPTION");
+
+    } finally {
+
+        restore();
+    }
+}
+
+async function run() {
+
+    button.disabled = true;
+    out.textContent = "";
+
+    tests = 0;
+    completed = 0;
+    exceptions = 0;
+    anomalies = 0;
+
+    status.textContent =
+        "STATUS: RUNNING";
+
+    const previous =
+        localStorage.getItem(
+            "PS5_V35_CP"
+        );
+
+    if (previous) {
+        log(
+            "PREVIOUS CHECKPOINT: " +
+            previous
+        );
+        log("");
+    }
+
+    log("PS5 13.60 — V35");
+    log(
+        "TransformStream Iterator Probe"
+    );
+    log("");
+    log(navigator.userAgent);
+
+    if (
+        typeof TransformStream !==
+        "function"
+    ) {
+
+        log(
+            "TransformStream unavailable"
+        );
+
+        status.textContent =
+            "STATUS: UNSUPPORTED";
+
+        button.disabled = false;
+        return;
+    }
+
+
+    /*
+     * CASE A
+     *
+     * Control.
+     * Return every original value unchanged.
+     */
+
+    await runCase(
+        "A_CONTROL",
+        function(value) {
+            return value;
+        }
+    );
+
+
+    /*
+     * CASE B
+     *
+     * Plain object substitution.
+     */
+
+    await runCase(
+        "B_PLAIN_OBJECT",
+        function(value, i, arr) {
+
+            if (
+                arr.length === 3 &&
+                i >= 1
+            ) {
+                return {
+                    marker:"V35",
+                    index:i
+                };
+            }
+
+            return value;
+        }
+    );
+
+
+    /*
+     * CASE C
+     *
+     * Primitive substitution.
+     */
+
+    await runCase(
+        "C_PRIMITIVE",
+        function(value, i, arr) {
+
+            if (
+                arr.length === 3 &&
+                i >= 1
+            ) {
+                return 0x41414141;
+            }
+
+            return value;
+        }
+    );
+
+
+    /*
+     * CASE D
+     *
+     * null substitution.
+     */
+
+    await runCase(
+        "D_NULL",
+        function(value, i, arr) {
+
+            if (
+                arr.length === 3 &&
+                i >= 1
+            ) {
+                return null;
+            }
+
+            return value;
+        }
+    );
+
+
+    /*
+     * CASE E
+     *
+     * Object with observable getters.
+     */
+
+    await runCase(
+        "E_GETTER_OBJECT",
+        function(value, i, arr) {
+
+            if (
+                arr.length === 3 &&
+                i >= 1
+            ) {
+
+                const object = {};
+
+                Object.defineProperty(
+                    object,
+                    "value",
+                    {
+                        get() {
+
+                            cp(
+                                "E_GETTER_OBJECT:" +
+                                "GETTER_EXECUTED"
+                            );
+
+                            log(
+                                "[E] getter executed"
+                            );
+
+                            return 1234;
+                        }
+                    }
+                );
+
+                return object;
+            }
+
+            return value;
+        }
+    );
+
+
+    /*
+     * CASE F
+     *
+     * Retained ordinary JS object.
+     */
+
+    const retained = {
+        marker:"RETAINED",
+        nested:{
+            value:0x1337
         }
     };
-};
-check("plain-object substitution", () => new TransformStream());
 
-// Variant 2: substitute an object that holds a heap pointer (would survive
-// the initial dereference and trigger the write-increment / vtable hijack).
-let buf = new ArrayBuffer(65536);
-Array.prototype[Symbol.iterator] = function() {
-    const arr = this;
-    let i = 0;
-    return {
-        next() {
-            if (i >= arr.length)
-                return { done: true };
-            let val = arr[i];
-            if (arr.length === 3 && i >= 1)
-                val = { pad: 0, ptr: buf };
-            i++;
-            return { value: val, done: false };
+    await runCase(
+        "F_RETAINED_OBJECT",
+        function(value, i, arr) {
+
+            if (
+                arr.length === 3 &&
+                i >= 1
+            ) {
+                return retained;
+            }
+
+            return value;
         }
-    };
-};
-check("object-reference substitution", () => new TransformStream());
+    );
 
-// Variant 3: truncated iterator returning fewer than 3 entries.
-Array.prototype[Symbol.iterator] = function() {
-    return { next() { return { done: true }; } };
-};
-check("truncated iterator", () => new TransformStream());
+    log("");
+    log(
+        "[F] retained marker=" +
+        retained.marker
+    );
 
-Array.prototype[Symbol.iterator] = originalIterator;
+    log(
+        "[F] retained value=" +
+        retained.nested.value
+    );
+
+
+    restore();
+
+    cp("V35:COMPLETE");
+
+    log("");
+    log("============================");
+    log("V35 RESULT");
+    log("============================");
+
+    log(
+        "TESTS: " +
+        tests
+    );
+
+    log(
+        "COMPLETED: " +
+        completed
+    );
+
+    log(
+        "EXCEPTIONS: " +
+        exceptions
+    );
+
+    log(
+        "ANOMALIES: " +
+        anomalies
+    );
+
+    log("============================");
+
+    status.textContent =
+        "STATUS: COMPLETE";
+
+    button.disabled = false;
+}
+
+button.onclick = run;
+
+window.addEventListener(
+    "error",
+    function(e) {
+
+        try {
+            restore();
+        } catch (_) {}
+
+        cp("V35:WINDOW_ERROR");
+
+        log(
+            "[WINDOW ERROR] " +
+            e.message
+        );
+    }
+);
+
+window.addEventListener(
+    "unhandledrejection",
+    function(e) {
+
+        cp(
+            "V35:UNHANDLED_REJECTION"
+        );
+
+        log(
+            "[UNHANDLED REJECTION] " +
+            e.reason
+        );
+    }
+);
 </script>
-</body>
-</html>
