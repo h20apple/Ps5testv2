@@ -2,53 +2,53 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5 WebKit 13.60 PoC V3</title>
+<title>PS5 WebKit 13.60 V4 Regression PoC</title>
 
 <style>
 body {
-  background:#101827;
-  color:#eee;
-  font:17px monospace;
-  padding:20px;
+    background:#101827;
+    color:#eee;
+    font:17px monospace;
+    padding:20px;
 }
-button, select {
-  font:17px monospace;
-  padding:10px 15px;
-  margin:4px;
+button,select {
+    font:17px monospace;
+    padding:10px 14px;
+    margin:4px;
 }
 #log {
-  background:#17233a;
-  padding:16px;
-  margin-top:15px;
-  white-space:pre-wrap;
+    background:#17233a;
+    padding:16px;
+    margin-top:15px;
+    white-space:pre-wrap;
 }
-.ok {color:#59ff7a}
-.bad {color:#ff6868}
-.info {color:#63caff}
-.warn {color:#ffd166}
+.ok { color:#59ff7a; }
+.bad { color:#ff6868; }
+.info { color:#63caff; }
+.warn { color:#ffd166; }
 </style>
 </head>
 
 <body>
 
-<h2>PS5 WebKit 13.60 — Reproducer V3</h2>
+<h2>PS5 WebKit 13.60 — V4 Regression PoC</h2>
 
 <select id="case">
-  <option value="all">All diagnostic cases</option>
-  <option value="typed">TypedArray integrity</option>
-  <option value="view">DataView bounds</option>
-  <option value="objects">Object churn</option>
-  <option value="dom">DOM churn</option>
+<option value="all">All cases</option>
+<option value="dom">DOM lifetime</option>
+<option value="mutation">Callback mutation</option>
+<option value="iframe">Iframe teardown</option>
+<option value="worker">Worker / ArrayBuffer</option>
 </select>
 
 <select id="runs">
-  <option value="100">100 runs</option>
-  <option value="500" selected>500 runs</option>
-  <option value="2000">2000 runs</option>
+<option value="100">100</option>
+<option value="500" selected>500</option>
+<option value="2000">2000</option>
 </select>
 
-<button onclick="start()">Run V3</button>
-<button onclick="stop()">Stop</button>
+<button onclick="start()">Run V4</button>
+<button onclick="requestStop()">Stop</button>
 <button onclick="clearLog()">Clear</button>
 
 <div id="log"></div>
@@ -56,484 +56,582 @@ button, select {
 <script>
 "use strict";
 
-const logbox = document.getElementById("log");
+const box = document.getElementById("log");
 
-let abort = false;
+let stopping = false;
 
-let result = {
-  tests:0,
-  passed:0,
-  failed:0,
-  anomalies:0,
-  last:0,
-  start:0
+let stats = {
+    tests:0,
+    pass:0,
+    fail:0,
+    anomaly:0,
+    iteration:0,
+    start:0
 };
 
-function log(s,c="") {
-  const d=document.createElement("div");
-  d.textContent=s;
-  d.className=c;
-  logbox.appendChild(d);
-  window.scrollTo(0,document.body.scrollHeight);
+function log(text, cls="") {
+    const e = document.createElement("div");
+    e.textContent = text;
+    e.className = cls;
+    box.appendChild(e);
+    window.scrollTo(0,document.body.scrollHeight);
 }
 
 function clearLog() {
-  logbox.innerHTML="";
+    box.innerHTML="";
 }
 
-function stop() {
-  abort=true;
-  log("STOP requested","warn");
+function requestStop() {
+    stopping=true;
+    log("STOP requested","warn");
 }
 
-function reset() {
-  abort=false;
+function checkpoint(test,iteration) {
+    try {
+        sessionStorage.setItem(
+            "webkit-v4-checkpoint",
+            JSON.stringify({
+                test:test,
+                iteration:iteration,
+                timestamp:Date.now()
+            })
+        );
+    } catch(e) {}
+}
 
-  result={
-    tests:0,
-    passed:0,
-    failed:0,
-    anomalies:0,
-    last:0,
-    start:performance.now()
-  };
+function showPreviousCheckpoint() {
+    try {
+        const raw =
+            sessionStorage.getItem(
+                "webkit-v4-checkpoint"
+            );
+
+        if (!raw)
+            return;
+
+        const c=JSON.parse(raw);
+
+        log(
+            "Previous checkpoint: "+
+            c.test+
+            " @ iteration "+
+            c.iteration,
+            "warn"
+        );
+
+    } catch(e) {}
+}
+
+function record(ok,name) {
+
+    stats.tests++;
+
+    if(ok) {
+        stats.pass++;
+        return;
+    }
+
+    stats.fail++;
+
+    log(
+        "[FAIL] "+name,
+        "bad"
+    );
 }
 
 /*
- Store progress in sessionStorage.
-
- If WebKit reloads, this gives us the last
- iteration that completed.
+ ========================================
+ CASE 1
+ DOM lifetime changes during callbacks
+ ========================================
 */
 
-function checkpoint(name,i) {
+async function domLifetime(iter) {
 
-  try {
+    const parent =
+        document.createElement("div");
 
-    sessionStorage.setItem(
-      "v3_checkpoint",
-      JSON.stringify({
-        case:name,
-        iteration:i,
-        time:Date.now()
-      })
-    );
+    const victim =
+        document.createElement("div");
 
-  } catch(e) {}
-}
+    parent.appendChild(victim);
+    document.body.appendChild(parent);
 
-function previousCheckpoint() {
+    let calls=0;
 
-  try {
+    function callback() {
 
-    const x=
-      sessionStorage.getItem(
-        "v3_checkpoint"
-      );
+        calls++;
 
-    if(x) {
+        victim.remove();
 
-      const p=JSON.parse(x);
+        /*
+         JS wrapper remains a valid JS
+         object even after DOM removal.
+        */
 
-      log(
-        "Previous checkpoint: "+
-        p.case+
-        " iteration "+
-        p.iteration,
-        "info"
-      );
+        victim.setAttribute(
+            "data-after-remove",
+            String(iter)
+        );
     }
 
-  } catch(e) {}
-}
-
-function runTest(name,fn) {
-
-  result.tests++;
-
-  try {
-
-    if(fn() !== true)
-      throw new Error(
-        "unexpected result"
-      );
-
-    result.passed++;
-    return true;
-
-  } catch(e) {
-
-    result.failed++;
-
-    log(
-      "[FAIL] "+name+
-      " :: "+e,
-      "bad"
+    victim.addEventListener(
+        "v4event",
+        callback
     );
 
-    return false;
-  }
+    victim.dispatchEvent(
+        new Event("v4event")
+    );
+
+    victim.removeEventListener(
+        "v4event",
+        callback
+    );
+
+    parent.remove();
+
+    return (
+        calls===1 &&
+        victim.getAttribute(
+            "data-after-remove"
+        )===String(iter)
+    );
 }
 
-/* -------------------------
-   TypedArray integrity
--------------------------- */
+/*
+ ========================================
+ CASE 2
+ Mutation while callback executes
+ ========================================
+*/
 
-function typedCase(iter) {
+async function mutationCase(iter) {
 
-  const size=0x8000;
+    const root =
+        document.createElement("div");
 
-  const b=
-    new ArrayBuffer(size);
+    document.body.appendChild(root);
 
-  const a=
-    new Uint32Array(b);
+    const nodes=[];
 
-  for(let i=0;i<a.length;i++) {
+    for(let i=0;i<64;i++) {
 
-    a[i]=(
-      0x13572468 ^
-      i ^
-      iter
-    )>>>0;
-  }
+        const n=
+            document.createElement("span");
 
-  for(let i=0;i<a.length;i++) {
+        n.textContent=
+            iter+":"+i;
 
-    const expected=(
-      0x13572468 ^
-      i ^
-      iter
-    )>>>0;
-
-    if(a[i]!==expected) {
-
-      result.anomalies++;
-
-      log(
-        "[ANOMALY] TypedArray "+
-        "iteration="+iter+
-        " index="+i,
-        "bad"
-      );
-
-      return false;
+        nodes.push(n);
+        root.appendChild(n);
     }
-  }
 
-  return true;
+    let calls=0;
+
+    function mutate() {
+
+        calls++;
+
+        while(root.firstChild)
+            root.removeChild(
+                root.firstChild
+            );
+
+        for(let i=0;i<32;i++) {
+
+            const n=
+                document.createElement("i");
+
+            n.textContent=
+                "new-"+i;
+
+            root.appendChild(n);
+        }
+    }
+
+    root.addEventListener(
+        "v4mutation",
+        mutate
+    );
+
+    root.dispatchEvent(
+        new Event("v4mutation")
+    );
+
+    const good =
+        calls===1 &&
+        root.childNodes.length===32;
+
+    root.remove();
+
+    return good;
 }
 
-/* -------------------------
-   DataView enforcement
--------------------------- */
+/*
+ ========================================
+ CASE 3
+ Document / iframe teardown
+ ========================================
+*/
 
-function viewCase() {
+async function iframeCase(iter) {
 
-  const b=
-    new ArrayBuffer(128);
+    return new Promise(resolve=>{
 
-  const d=
-    new DataView(b);
+        const frame=
+            document.createElement(
+                "iframe"
+            );
 
-  d.setUint32(
-    8,
-    0x11223344
-  );
+        let finished=false;
 
-  if(
-    d.getUint32(8) !==
-    0x11223344
-  )
-    return false;
+        const timer=setTimeout(()=>{
 
-  let caught=false;
+            if(finished)
+                return;
 
-  try {
+            finished=true;
 
-    d.getUint32(130);
+            try { frame.remove(); }
+            catch(e) {}
 
-  } catch(e) {
+            resolve(false);
 
-    caught=true;
-  }
+        },1000);
 
-  return caught;
-}
+        frame.onload=function(){
 
-/* -------------------------
-   Object/GC pressure
--------------------------- */
+            if(finished)
+                return;
 
-function objectCase(iter) {
+            try {
 
-  let objects=[];
+                const doc=
+                    frame.contentDocument;
 
-  for(let i=0;i<2000;i++) {
+                const element=
+                    doc.createElement("div");
 
-    objects.push({
-      a:i,
-      b:iter,
-      c:"webkit-"+i,
-      d:[i,i+1,i+2]
+                element.textContent=
+                    "iteration-"+iter;
+
+                doc.body.appendChild(
+                    element
+                );
+
+                frame.remove();
+
+                /*
+                 Retain JS references after
+                 document teardown and inspect
+                 ordinary JS-visible state.
+                */
+
+                const ok=
+                    element.textContent===
+                    "iteration-"+iter;
+
+                finished=true;
+                clearTimeout(timer);
+
+                resolve(ok);
+
+            } catch(e) {
+
+                finished=true;
+                clearTimeout(timer);
+
+                try { frame.remove(); }
+                catch(x) {}
+
+                resolve(false);
+            }
+        };
+
+        frame.src="about:blank";
+
+        document.body.appendChild(
+            frame
+        );
     });
-  }
-
-  for(let i=0;i<objects.length;i+=127) {
-
-    if(
-      objects[i].a !== i ||
-      objects[i].b !== iter
-    ) {
-
-      result.anomalies++;
-      return false;
-    }
-  }
-
-  objects=null;
-
-  return true;
 }
 
-/* -------------------------
-   DOM lifecycle pressure
--------------------------- */
+/*
+ ========================================
+ CASE 4
+ Worker / ArrayBuffer lifecycle
+ ========================================
+*/
 
-function domCase(iter) {
+async function workerCase(iter) {
 
-  const root=
-    document.createElement("div");
+    return new Promise(resolve=>{
 
-  for(let i=0;i<250;i++) {
+        if(typeof Worker==="undefined") {
+            resolve(true);
+            return;
+        }
 
-    const e=
-      document.createElement("span");
+        const source=`
+        self.onmessage=function(e) {
+            const a=new Uint32Array(e.data);
 
-    e.textContent=
-      iter+":"+i;
+            const good=
+                a.length===64 &&
+                a[0]===e.data.byteLength;
 
-    e.setAttribute(
-      "data-test",
-      String(i)
-    );
+            self.postMessage({
+                good:good,
+                first:a[0]
+            });
+        };
+        `;
 
-    root.appendChild(e);
-  }
+        const blob=
+            new Blob(
+                [source],
+                {type:"text/javascript"}
+            );
 
-  document.body.appendChild(root);
+        const url=
+            URL.createObjectURL(blob);
 
-  const count=
-    root.childNodes.length;
+        const worker=
+            new Worker(url);
 
-  root.remove();
+        const buffer=
+            new ArrayBuffer(256);
 
-  return count===250;
+        const view=
+            new Uint32Array(buffer);
+
+        view[0]=256;
+
+        let finished=false;
+
+        const timer=setTimeout(()=>{
+
+            if(finished)
+                return;
+
+            finished=true;
+
+            worker.terminate();
+            URL.revokeObjectURL(url);
+
+            resolve(false);
+
+        },1500);
+
+        worker.onmessage=function(e){
+
+            if(finished)
+                return;
+
+            finished=true;
+            clearTimeout(timer);
+
+            const ok=
+                e.data &&
+                e.data.good===true &&
+                e.data.first===256;
+
+            worker.terminate();
+            URL.revokeObjectURL(url);
+
+            resolve(ok);
+        };
+
+        worker.onerror=function(){
+
+            if(finished)
+                return;
+
+            finished=true;
+            clearTimeout(timer);
+
+            worker.terminate();
+            URL.revokeObjectURL(url);
+
+            resolve(false);
+        };
+
+        worker.postMessage(buffer);
+    });
 }
 
-/* -------------------------
-   Dispatcher
--------------------------- */
-
-function execute(which,i) {
-
-  if(which==="typed")
-    return runTest(
-      "TypedArray",
-      ()=>typedCase(i)
-    );
-
-  if(which==="view")
-    return runTest(
-      "DataView",
-      viewCase
-    );
-
-  if(which==="objects")
-    return runTest(
-      "Object churn",
-      ()=>objectCase(i)
-    );
-
-  if(which==="dom")
-    return runTest(
-      "DOM churn",
-      ()=>domCase(i)
-    );
-
-  return true;
-}
-
-/* -------------------------
-   Main runner
--------------------------- */
+const tests={
+    dom:domLifetime,
+    mutation:mutationCase,
+    iframe:iframeCase,
+    worker:workerCase
+};
 
 async function start() {
 
-  clearLog();
-  reset();
+    clearLog();
 
-  previousCheckpoint();
+    stopping=false;
 
-  const selected=
-    document.getElementById(
-      "case"
-    ).value;
+    stats={
+        tests:0,
+        pass:0,
+        fail:0,
+        anomaly:0,
+        iteration:0,
+        start:performance.now()
+    };
 
-  const runs=
-    Number(
-      document.getElementById(
-        "runs"
-      ).value
-    );
+    showPreviousCheckpoint();
 
-  log(
-    "PS5 WebKit V3 starting...",
-    "info"
-  );
+    const selected=
+        document.getElementById(
+            "case"
+        ).value;
 
-  log(
-    "UA: "+
-    navigator.userAgent
-  );
+    const runs=
+        Number(
+            document.getElementById(
+                "runs"
+            ).value
+        );
 
-  log(
-    "Selected: "+
-    selected
-  );
-
-  log(
-    "Iterations: "+
-    runs
-  );
-
-  log("");
-
-  const cases=
-    selected==="all"
-    ?
-    [
-      "typed",
-      "view",
-      "objects",
-      "dom"
-    ]
-    :
-    [selected];
-
-  for(let i=0;i<runs;i++) {
-
-    if(abort)
-      break;
-
-    result.last=i;
-
-    for(
-      let n=0;
-      n<cases.length;
-      n++
-    ) {
-
-      const name=cases[n];
-
-      checkpoint(
-        name,
-        i
-      );
-
-      execute(
-        name,
-        i
-      );
-
-      if(abort)
-        break;
-    }
-
-    /*
-      Let WebKit process pending UI,
-      GC and event-loop activity.
-    */
-
-    if((i%25)===0) {
-
-      log(
-        "Iteration "+
-        i+
-        " / "+
-        runs,
-        "info"
-      );
-
-      await new Promise(
-        resolve=>
-          setTimeout(resolve,0)
-      );
-    }
-  }
-
-  const elapsed=
-    performance.now()-
-    result.start;
-
-  log("");
-  log(
-    "========== V3 RESULT ==========",
-    "info"
-  );
-
-  log(
-    "Tests:      "+
-    result.tests
-  );
-
-  log(
-    "Passed:     "+
-    result.passed,
-    "ok"
-  );
-
-  log(
-    "Failed:     "+
-    result.failed,
-    result.failed ?
-      "bad":"ok"
-  );
-
-  log(
-    "Anomalies:  "+
-    result.anomalies,
-    result.anomalies ?
-      "bad":"ok"
-  );
-
-  log(
-    "Last run:   "+
-    result.last
-  );
-
-  log(
-    "Runtime:    "+
-    elapsed.toFixed(2)+
-    " ms"
-  );
-
-  if(
-    !abort &&
-    result.failed===0 &&
-    result.anomalies===0
-  ) {
+    const selectedTests=
+        selected==="all"
+        ? Object.keys(tests)
+        : [selected];
 
     log(
-      "[PASS] Stable run",
-      "ok"
+        "PS5 WebKit V4 starting...",
+        "info"
     );
-  }
 
-  log(
-    "===============================",
-    "info"
-  );
+    log(
+        "UA: "+navigator.userAgent
+    );
+
+    log(
+        "Cases: "+
+        selectedTests.join(", ")
+    );
+
+    log(
+        "Iterations: "+runs
+    );
+
+    log("");
+
+    for(let i=0;i<runs;i++) {
+
+        if(stopping)
+            break;
+
+        stats.iteration=i;
+
+        for(const name of selectedTests) {
+
+            if(stopping)
+                break;
+
+            checkpoint(name,i);
+
+            try {
+
+                const ok=
+                    await tests[name](i);
+
+                record(
+                    ok===true,
+                    name+
+                    " iteration "+
+                    i
+                );
+
+            } catch(e) {
+
+                stats.tests++;
+                stats.fail++;
+                stats.anomaly++;
+
+                log(
+                    "[EXCEPTION] "+
+                    name+
+                    " iteration="+
+                    i+
+                    " :: "+
+                    e,
+                    "bad"
+                );
+            }
+        }
+
+        if((i%25)===0) {
+
+            log(
+                "Iteration "+
+                i+
+                " / "+
+                runs,
+                "info"
+            );
+
+            await new Promise(
+                r=>setTimeout(r,0)
+            );
+        }
+    }
+
+    const runtime=
+        performance.now()-
+        stats.start;
+
+    log("");
+    log(
+        "========== V4 RESULT ==========",
+        "info"
+    );
+
+    log("Tests:     "+stats.tests);
+    log("Passed:    "+stats.pass,"ok");
+
+    log(
+        "Failed:    "+stats.fail,
+        stats.fail ? "bad":"ok"
+    );
+
+    log(
+        "Anomalies: "+stats.anomaly,
+        stats.anomaly ? "bad":"ok"
+    );
+
+    log(
+        "Last run:  "+
+        stats.iteration
+    );
+
+    log(
+        "Runtime:   "+
+        runtime.toFixed(2)+
+        " ms"
+    );
+
+    if(
+        !stopping &&
+        stats.fail===0 &&
+        stats.anomaly===0
+    ) {
+        log(
+            "[PASS] Stable run",
+            "ok"
+        );
+    }
+
+    log(
+        "===============================",
+        "info"
+    );
 }
 
 </script>
